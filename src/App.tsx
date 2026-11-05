@@ -3,6 +3,7 @@ import {
   ANGLES,
   BEATS,
   BIBLES,
+  CHARACTERS,
   MODELS,
   MOVES,
   QC_LABELS,
@@ -12,6 +13,9 @@ import {
   TRANSITIONS,
   beatLabel,
   blankShot,
+  buildBridge,
+  buildCharacterSheet,
+  buildCoverage,
   buildImagePrompt,
   buildVideoPrompt,
   checkRules,
@@ -24,13 +28,15 @@ import {
   parseProject,
   projectRealNames,
   qcAverage,
+  type Character,
   type PresetKey,
   type Project,
   type Shot,
 } from './lib';
+import { BEAT_RECO, TECHNIQUES, TECH_CATS, isCompatible, recommend, techById } from './techniques';
 
 const KEY = 'flow-studio-v1';
-const TABS = ['브리프', '콘티', '프롬프트', '기록·크레딧'] as const;
+const TABS = ['브리프', '콘티', '연출', '프롬프트', '기록·크레딧'] as const;
 type Tab = (typeof TABS)[number];
 
 function load(): Project {
@@ -72,6 +78,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('브리프');
   const [toast, setToast] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const [sel, setSel] = useState(0); // 연출 탭에서 선택된 샷
+  const [openCov, setOpenCov] = useState<number | null>(null);
 
   useEffect(() => {
     try {
@@ -94,10 +102,26 @@ export default function App() {
   const setBrief = (patch: Partial<Project['brief']>) => setP((x) => ({ ...x, brief: { ...x.brief, ...patch } }));
   const setShot = (i: number, patch: Partial<Shot>) =>
     setP((x) => ({ ...x, shots: x.shots.map((s, j) => (j === i ? { ...s, ...patch } : s)) }));
+  const setChar = (i: number, patch: Partial<Character>) =>
+    setP((x) => ({ ...x, characters: x.characters.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
+  const toggleTech = (i: number, id: string) =>
+    setP((x) => ({
+      ...x,
+      shots: x.shots.map((s, j) =>
+        j !== i ? s : { ...s, techniques: s.techniques.includes(id) ? s.techniques.filter((t) => t !== id) : [...s.techniques, id] },
+      ),
+    }));
+  const autoDirect = () => {
+    if (!confirm('모든 샷의 연출 기법을 비트별 추천으로 덮어쓸까요?')) return;
+    setP((x) => ({ ...x, shots: x.shots.map((s) => ({ ...s, techniques: recommend(s.beat, s.move) })) }));
+    say('✅ 비트별 추천 연출 적용');
+  };
+  const ch = p.characters;
+  const charName = (id: string) => ch.find((c) => c.id === id)?.name ?? '';
 
   const applyPreset = (k: PresetKey) => {
     if (!confirm(`프리셋 ${BIBLES[k].name}로 바꾸고 8샷을 다시 배치할까요?\n(현재 샷 내용은 덮어씁니다)`)) return;
-    setP((x) => ({ ...x, brief: { ...x.brief, preset: k }, bible: { ...BIBLES[k] }, shots: defaultShots(k) }));
+    setP((x) => ({ ...x, brief: { ...x.brief, preset: k }, bible: { ...BIBLES[k] }, characters: CHARACTERS[k].map((c) => ({ ...c })), shots: defaultShots(k) }));
     say('✅ 프리셋 적용 + 8샷 자동 배치');
   };
 
@@ -119,8 +143,8 @@ export default function App() {
 
   const allPrompts = p.shots
     .map((s) => {
-      const v = `### ${s.id} (${beatLabel(s.beat)}, ${s.seconds}s, ${s.model})\n${buildVideoPrompt(s, p.bible, p.brief.format)}`;
-      return s.keyframe ? `${v}\n\n### ${s.id} 키프레임(Nano Banana)\n${buildImagePrompt(s, p.bible, p.brief.format)}` : v;
+      const v = `### ${s.id} (${beatLabel(s.beat)}, ${s.seconds}s, ${s.model})\n${buildVideoPrompt(s, p.bible, p.brief.format, ch)}`;
+      return s.keyframe ? `${v}\n\n### ${s.id} 키프레임(Nano Banana)\n${buildImagePrompt(s, p.bible, p.brief.format, ch)}` : v;
     })
     .join('\n\n');
 
@@ -131,7 +155,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <h1>🎬 Flow 콘티 스튜디오</h1>
+        <h1><span className="dot" />Flow 콘티 스튜디오 <small>// cinematic prompt studio</small></h1>
         <nav>
           {TABS.map((t) => (
             <button key={t} className={t === tab ? 'on' : ''} onClick={() => setTab(t)}>
@@ -211,6 +235,32 @@ export default function App() {
                 <input value={p.bible.lensClose} onChange={(e) => setP((x) => ({ ...x, bible: { ...x.bible, lensClose: e.target.value } }))} />
               </label>
             </div>
+            <div className="field">
+              <b className="sub">👤 캐릭터 시트 (샷마다 같은 외형으로 고정 · 실존 인물 금지)</b>
+              {ch.map((c, i) => (
+                <div key={i} className="charrow">
+                  <div className="row">
+                    <input className="w5" value={c.id} onChange={(e) => setChar(i, { id: e.target.value })} title="ID" />
+                    <input value={c.name} placeholder="이름(한국어 라벨, 프롬프트 제외)" onChange={(e) => setChar(i, { name: e.target.value })} />
+                    <button className="x" onClick={() => confirm(`${c.name || c.id} 삭제?`) && setP((x) => ({ ...x, characters: x.characters.filter((_, j) => j !== i) }))}>
+                      ✕
+                    </button>
+                  </div>
+                  <input value={c.look} placeholder="look (외형, 영어)" onChange={(e) => setChar(i, { look: e.target.value })} />
+                  <input value={c.wardrobe} placeholder="wardrobe (의상, 영어)" onChange={(e) => setChar(i, { wardrobe: e.target.value })} />
+                  <input value={c.signature} placeholder="signature (상징 소품·습관, 영어)" onChange={(e) => setChar(i, { signature: e.target.value })} />
+                </div>
+              ))}
+              <div>
+                <button
+                  onClick={() =>
+                    setP((x) => ({ ...x, characters: [...x.characters, { id: `C${x.characters.length + 1}`, name: '', look: '', wardrobe: '', signature: '' }] }))
+                  }
+                >
+                  + 캐릭터 추가
+                </button>
+              </div>
+            </div>
             <div className="row wrap">
               <button onClick={() => download(fname('json'), JSON.stringify(exportJson(p), null, 2), 'application/json')}>⬇️ JSON 내보내기</button>
               <button onClick={() => fileRef.current?.click()}>📂 JSON 불러오기</button>
@@ -253,6 +303,7 @@ export default function App() {
                     <th>카메라무브·속도·끝상태</th>
                     <th>피사체 · 동작 1개</th>
                     <th>장소 · 조명·시간</th>
+                    <th>연출 · 캐릭터</th>
                     <th>전환</th>
                     <th>초</th>
                     <th>모델</th>
@@ -309,6 +360,18 @@ export default function App() {
                         <input value={s.lighting} placeholder="lighting, time" onChange={(e) => setShot(i, { lighting: e.target.value })} />
                       </td>
                       <td>
+                        <button
+                          className="linkbtn"
+                          onClick={() => {
+                            setSel(i);
+                            setTab('연출');
+                          }}
+                        >
+                          🎥 {s.techniques.map((id) => techById(id)?.ko).filter(Boolean).join(', ') || '기법 선택'}
+                          {s.characterId && <small> · 👤{charName(s.characterId) || s.characterId}</small>}
+                        </button>
+                      </td>
+                      <td>
                         <Sel v={s.transition} opts={TRANSITIONS} on={(v) => setShot(i, { transition: v })} />
                       </td>
                       <td>
@@ -336,6 +399,72 @@ export default function App() {
           </section>
         )}
 
+        {tab === '연출' && p.shots.length > 0 && (() => {
+          const i = Math.min(sel, p.shots.length - 1);
+          const s = p.shots[i];
+          const reco = BEAT_RECO[s.beat];
+          return (
+            <section>
+              <div className="card">
+                <div className="row wrap">
+                  <b className="sub">🎥 영화 연출 기법 — 샷에 붙이면 프롬프트에 "Cinematography:" 줄로 들어갑니다</b>
+                  <button className="primary" onClick={autoDirect}>
+                    ✨ 전체 샷 비트별 추천 적용
+                  </button>
+                </div>
+                <div className="chips">
+                  {p.shots.map((x, j) => (
+                    <button key={j} className={j === i ? 'on' : flagged.has(x.id) ? 'warnchip' : ''} onClick={() => setSel(j)}>
+                      {x.id} <small>{beatLabel(x.beat)}·{x.techniques.length}</small>
+                    </button>
+                  ))}
+                </div>
+                <div className="muted">
+                  {s.id} · {beatLabel(s.beat)} · {s.size} · {s.angle} · 무브 <b>{s.move || '미지정'}</b> — ★ = 이 비트 추천, 회색 = 현재 무브와 안 맞음(콘티에서 무브 변경)
+                </div>
+                <label className="inline">
+                  👤 캐릭터 고정
+                  <select value={s.characterId} onChange={(e) => setShot(i, { characterId: e.target.value })}>
+                    <option value="">(없음)</option>
+                    {ch.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.id} {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {TECH_CATS.map((cat) => (
+                <div key={cat} className="card">
+                  <b className="sub">{cat}</b>
+                  <div className="techgrid">
+                    {TECHNIQUES.filter((t) => t.cat === cat).map((t) => {
+                      const on = s.techniques.includes(t.id);
+                      const ok = isCompatible(t, s.move);
+                      return (
+                        <button key={t.id} className={`tech ${on ? 'on' : ''} ${!ok ? 'dim' : ''}`} onClick={() => toggleTech(i, t.id)} title={t.en}>
+                          <span>
+                            {reco.includes(t.id) && '★ '}
+                            {t.ko}
+                          </span>
+                          <small>{t.use}{t.moves ? ` · 무브: ${t.moves.join('/')}` : ''}</small>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <div className="card">
+                <div className="cardhead">
+                  <b>미리보기 — {s.id} 영상 프롬프트</b>
+                  <button onClick={() => copy(buildVideoPrompt(s, p.bible, p.brief.format, ch), `${s.id} 복사됨`)}>복사</button>
+                </div>
+                <Code t={buildVideoPrompt(s, p.bible, p.brief.format, ch)} />
+              </div>
+            </section>
+          );
+        })()}
+
         {tab === '프롬프트' && (
           <section>
             <div className="row wrap">
@@ -344,9 +473,21 @@ export default function App() {
               </button>
               <span className="muted">{p.bible.name} · {p.brief.format === 'shorts' ? '9:16' : '16:9'}</span>
             </div>
+            {ch.map((c) => {
+              const t = buildCharacterSheet(c, p.bible);
+              return (
+                <div key={c.id} className="card">
+                  <div className="cardhead">
+                    <b>👤 {c.id} {c.name} — 캐릭터 시트 (먼저 이미지로 만들어 참조 이미지로 사용)</b>
+                    <button onClick={() => copy(t, `${c.id} 캐릭터 시트 복사됨`)}>복사</button>
+                  </div>
+                  <Code t={t} kind="img" />
+                </div>
+              );
+            })}
             {p.shots.map((s, i) => {
-              const v = buildVideoPrompt(s, p.bible, p.brief.format);
-              const img = s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format) : '';
+              const v = buildVideoPrompt(s, p.bible, p.brief.format, ch);
+              const img = s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format, ch) : '';
               return (
                 <div key={i} className={`card ${flagged.has(s.id) ? 'flagcard' : ''}`}>
                   <div className="cardhead">
@@ -354,21 +495,51 @@ export default function App() {
                       {s.id} · {beatLabel(s.beat)} · {s.size} · {s.seconds}s · {s.model}
                     </b>
                     {flagged.has(s.id) && <span className="red">규칙 경고</span>}
+                    <button onClick={() => setOpenCov(openCov === i ? null : i)}>{openCov === i ? '접기' : '멀티앵글'}</button>
                     <button onClick={() => copy(v, `${s.id} 복사됨`)}>복사</button>
                   </div>
-                  <pre>{v}</pre>
+                  <Code t={v} />
+                  {openCov === i &&
+                    buildCoverage(s, p.bible, p.brief.format, ch).map((cv, k) => (
+                      <div key={k}>
+                        <div className="cardhead">
+                          <b>🎞 {s.id}-{String.fromCharCode(65 + k)} {cv.label}</b>
+                          <button onClick={() => copy(cv.prompt, `${s.id} ${cv.label} 복사됨`)}>복사</button>
+                        </div>
+                        <Code t={cv.prompt} kind="cov" />
+                      </div>
+                    ))}
                   {img && (
                     <>
                       <div className="cardhead">
                         <b>🖼 키프레임 (Nano Banana)</b>
                         <button onClick={() => copy(img, `${s.id} 키프레임 복사됨`)}>복사</button>
                       </div>
-                      <pre className="img">{img}</pre>
+                      <Code t={img} kind="img" />
                     </>
                   )}
                 </div>
               );
             })}
+            <div className="card">
+              <b className="sub">🔀 전환 브리지 — 매치컷·빛변화·암전 사이를 잇는 2초 연결 샷 (시작·끝 프레임 모드용)</b>
+              {p.shots.slice(0, -1).map((a, k) => {
+                const b = p.shots[k + 1];
+                const t = buildBridge(a, b, p.bible, p.brief.format);
+                return t ? (
+                  <div key={k}>
+                    <div className="cardhead">
+                      <b>
+                        {a.id} → {b.id} · {a.transition}
+                      </b>
+                      <button onClick={() => copy(t, `${a.id}→${b.id} 브리지 복사됨`)}>복사</button>
+                    </div>
+                    <Code t={t} kind="cov" />
+                  </div>
+                ) : null;
+              })}
+              <div className="muted">하드컷 구간은 브리지가 필요 없어 생략됩니다.</div>
+            </div>
           </section>
         )}
 
@@ -461,6 +632,21 @@ export default function App() {
       <footer className="muted">서버·API 키 없음 · 이 브라우저(localStorage)에만 저장됩니다 · 백업은 JSON 내보내기</footer>
       {toast && <div className="toast">{toast}</div>}
     </div>
+  );
+}
+
+// 프롬프트 블록: 줄 머리("Setting:" 등)를 코드 에디터처럼 색 구분
+function Code({ t, kind }: { t: string; kind?: 'img' | 'cov' }) {
+  return (
+    <pre className={kind ?? ''}>
+      {t.split('\n').map((line, i) => {
+        if (/^No text/i.test(line)) return <span key={i} className="c-cm">{line + '\n'}</span>;
+        const m = line.match(/^([A-Z][A-Za-z ]{2,24}:)(.*)$/);
+        if (m) return <span key={i}><span className="c-kw">{m[1]}</span>{m[2] + '\n'}</span>;
+        if (i === 0) return <span key={i} className="c-fn">{line + '\n'}</span>;
+        return <span key={i}>{line + '\n'}</span>;
+      })}
+    </pre>
   );
 }
 

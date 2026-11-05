@@ -136,3 +136,52 @@ describe('실존 인물·내보내기', () => {
     expect(mdText.split('\n').filter((l) => l.startsWith('| S0')).length).toBe(8);
   });
 });
+
+import { buildBridge, buildCharacterSheet, buildCoverage, CHARACTERS } from './lib';
+import { recommend, TECHNIQUES } from './techniques';
+
+describe('연출 기법·캐릭터·커버리지·전환', () => {
+  const p = defaultProject('A');
+
+  it('기법 id는 중복이 없다', () => {
+    expect(new Set(TECHNIQUES.map((t) => t.id)).size).toBe(TECHNIQUES.length);
+  });
+
+  it('추천은 카메라무브와 호환되는 기법만 고른다', () => {
+    expect(recommend('twist', '고정')).not.toContain('dollyzoom');
+    expect(recommend('twist', '돌리인')).toContain('dollyzoom');
+    expect(recommend('hook', '크레인').length).toBeLessThanOrEqual(2);
+  });
+
+  it('기본 샷 프롬프트에 Cinematography 줄과 캐릭터 고정 줄이 들어간다', () => {
+    const v = buildVideoPrompt(p.shots[0], p.bible, 'shorts', p.characters);
+    expect(v).toMatch(/Cinematography: .+/);
+    expect(v).toContain('Character lock: lone explorer silhouette');
+    expect(v).toContain('wearing long weathered canvas coat');
+  });
+
+  it('무브와 맞지 않는 기법은 techConflict 경고', () => {
+    const s = defaultShots('A');
+    s[1].techniques = ['dollyzoom']; // S02는 고정샷
+    expect(checkRules(s).find((w) => w.rule === 'techConflict')?.shotIds).toEqual(['S02']);
+  });
+
+  it('멀티앵글 커버리지 6종, 모두 금지 문구 포함', () => {
+    const vs = buildCoverage(p.shots[0], p.bible, 'shorts', p.characters);
+    expect(vs).toHaveLength(6);
+    for (const v of vs) expect(v.prompt).toContain('No text, no logos');
+    expect(vs[2].prompt).toContain('over-the-shoulder');
+  });
+
+  it('전환 브리지: 하드컷은 null, 매치컷은 프롬프트 생성', () => {
+    const s = defaultShots('A');
+    expect(buildBridge(s[0], s[1], p.bible, 'shorts')).toBeNull(); // S01 하드컷
+    expect(buildBridge(s[1], s[2], p.bible, 'shorts')).toContain('match cut'); // S02 매치컷
+  });
+
+  it('캐릭터 시트 프롬프트', () => {
+    const t = buildCharacterSheet(CHARACTERS.B[0], BIBLES.B);
+    expect(t).toContain('turnaround');
+    expect(t).toContain('raccoon');
+  });
+});

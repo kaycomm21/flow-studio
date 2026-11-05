@@ -1,4 +1,5 @@
 // Flow 콘티 스튜디오 — 순수 로직(테스트 대상). UI 없음, 외부 API 호출 없음.
+import { recommend, techById } from './techniques';
 
 export type PresetKey = 'A' | 'B' | 'C';
 export type FormatKey = 'shorts' | 'long';
@@ -46,6 +47,8 @@ export interface Shot {
   seconds: number;
   model: Model;
   keyframe: boolean;
+  techniques: string[]; // 연출 기법 id
+  characterId: string; // '' = 없음
   // 생성 기록
   status: Status;
   credits: number;
@@ -58,9 +61,18 @@ export interface CreditState {
   pastEpisodes: number;
 }
 
+export interface Character {
+  id: string;
+  name: string; // 한국어 라벨 (프롬프트에 안 들어감)
+  look: string;
+  wardrobe: string;
+  signature: string;
+}
+
 export interface Project {
   brief: Brief;
   bible: Bible;
+  characters: Character[];
   shots: Shot[];
   credit: CreditState;
 }
@@ -182,6 +194,22 @@ const ROWS: Record<PresetKey, Row[]> = {
   ],
 };
 
+export const CHARACTERS: Record<PresetKey, Character[]> = {
+  A: [
+    { id: 'C1', name: '랜턴 탐험가', look: 'lone explorer silhouette, tall and slim, face always hidden in shadow', wardrobe: 'long weathered canvas coat, wide-brim hat, leather satchel', signature: 'carries an old brass oil lantern' },
+  ],
+  B: [
+    { id: 'C1', name: '너구리 주무관', look: 'anthropomorphic raccoon civil servant, plump, tired eyes', wardrobe: 'grey suit, loose tie, ID lanyard', signature: 'always holds a red rubber stamp' },
+    { id: 'C2', name: '너구리 장관', look: 'older anthropomorphic raccoon minister with grey-streaked fur', wardrobe: 'navy suit, gold acorn lapel pin', signature: 'adjusts his tie when nervous' },
+  ],
+  C: [],
+};
+const CHAR_MAP: Record<PresetKey, string[]> = {
+  A: ['C1', '', 'C1', '', '', 'C1', 'C1', ''],
+  B: ['C1', '', '', 'C2', '', 'C2', '', 'C1'],
+  C: ['', '', '', '', '', '', '', ''],
+};
+
 const PURPOSES: [Shot['purposeType'], string][] = [
   ['질문', '이게 뭐지? (호기심 유발)'],
   ['답', '어디인지 알려줌'],
@@ -212,6 +240,8 @@ export function defaultShots(preset: PresetKey): Shot[] {
     seconds: DEFAULT_SECONDS[i],
     model: r[10],
     keyframe: r[11],
+    techniques: recommend(BEAT_LAYOUT[i], r[2]),
+    characterId: CHAR_MAP[preset][i],
     status: '대기',
     credits: 0,
     qc: [0, 0, 0, 0, 0],
@@ -237,6 +267,8 @@ export function blankShot(index: number): Shot {
     seconds: 5,
     model: 'Fast',
     keyframe: false,
+    techniques: [],
+    characterId: '',
     status: '대기',
     credits: 0,
     qc: [0, 0, 0, 0, 0],
@@ -254,6 +286,7 @@ export function defaultProject(preset: PresetKey = 'A'): Project {
       facts: ['', '', ''],
     },
     bible: { ...BIBLES[preset] },
+    characters: CHARACTERS[preset].map((c) => ({ ...c })),
     shots: defaultShots(preset),
     credit: { start: 1050, pastUsed: 0, pastEpisodes: 0 },
   };
@@ -261,7 +294,7 @@ export function defaultProject(preset: PresetKey = 'A'): Project {
 
 // ───────── 규칙 경고 ─────────
 export interface Warning {
-  rule: 'sameSize' | 'noMove' | 'fewFixed' | 'multiAction' | 'noInsert';
+  rule: 'sameSize' | 'noMove' | 'fewFixed' | 'multiAction' | 'noInsert' | 'techConflict';
   shotIds: string[];
   message: string;
 }
@@ -300,6 +333,14 @@ export function checkRules(shots: Shot[]): Warning[] {
       w.push({ rule: 'multiAction', shotIds: [s.id], message: `${s.id}: 동작이 2개 이상("그리고"/"and") — 1개로 줄이세요` });
     }
   }
+  for (const s of shots) {
+    for (const id of s.techniques ?? []) {
+      const t = techById(id);
+      if (t?.moves && !t.moves.includes(s.move)) {
+        w.push({ rule: 'techConflict', shotIds: [s.id], message: `${s.id}: '${t.ko}'는 카메라무브 ${t.moves.join('/')}와 써야 함 (현재 ${s.move || '미지정'})` });
+      }
+    }
+  }
   if (shots.length > 0 && !shots.some((s) => s.size === 'INSERT')) {
     w.push({ rule: 'noInsert', shotIds: [], message: '씬에 INSERT 샷이 0개 — 최소 1개 넣으세요' });
   }
@@ -322,6 +363,7 @@ export function findRealNames(text: string): string[] {
 
 export function projectRealNames(p: Project): string[] {
   const parts = [p.brief.series, p.brief.channel, p.brief.topic, ...p.brief.facts];
+  for (const c of p.characters ?? []) parts.push(c.name, c.look, c.wardrobe, c.signature);
   for (const s of p.shots) parts.push(s.subject, s.action, s.setting, s.lighting, s.endState, s.purpose);
   return [...new Set(findRealNames(parts.join(' \n ')))];
 }
@@ -342,30 +384,103 @@ export function cameraClause(s: Shot): string {
   return out + '.';
 }
 
-export function buildVideoPrompt(s: Shot, bible: Bible, format: FormatKey): string {
+export function techniqueLine(s: Shot): string {
+  const en = (s.techniques ?? []).map((id) => techById(id)?.en).filter(Boolean);
+  return en.length ? `Cinematography: ${en.join('; ')}.` : '';
+}
+
+export function characterLine(s: Shot, chars: Character[] = []): string {
+  const c = chars.find((x) => x.id === s.characterId);
+  if (!c) return '';
+  const bits = [clean(c.look), c.wardrobe.trim() && `wearing ${clean(c.wardrobe)}`, clean(c.signature)].filter(Boolean);
+  return `Character lock: ${bits.join(', ')}; keep the exact same design in every shot.`;
+}
+
+export function buildVideoPrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = []): string {
   const lens = isClose(s.size) ? bible.lensClose : bible.lensWide;
   const lines = [
     cameraClause(s),
     `${cap(clean(s.subject) || 'The subject')} ${clean(s.action) || 'holds still'}.`,
+    characterLine(s, chars),
     `Setting: ${clean(s.setting) || 'as established'}; lighting and time: ${clean(s.lighting) || 'natural light'}.`,
     `Lens and render: ${[clean(lens), clean(bible.render), aspectOf(format)].filter(Boolean).join(', ')}.`,
+    techniqueLine(s),
     `STYLE BIBLE: ${clean(bible.block)}.`,
     `${cap(NEGATIVE)}.`,
   ];
-  return lines.join('\n');
+  return lines.filter(Boolean).join('\n');
 }
 
-export function buildImagePrompt(s: Shot, bible: Bible, format: FormatKey): string {
+export function buildImagePrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = []): string {
   const lens = isClose(s.size) ? bible.lensClose : bible.lensWide;
+  const still = (s.techniques ?? []).map((id) => techById(id)).filter((t) => t && t.cat !== '카메라' && t.cat !== '속도·질감');
   const lines = [
     `Cinematic still keyframe (first frame), ${SIZE_EN[s.size]}, ${ANGLE_EN[s.angle]}.`,
     `${cap(clean(s.subject) || 'The subject')}, at the moment just before it ${clean(s.action) || 'moves'}.`,
+    characterLine(s, chars),
+    still.length ? `Cinematography: ${still.map((t) => t!.en).join('; ')}.` : '',
     `Setting: ${clean(s.setting) || 'as established'}; lighting and time: ${clean(s.lighting) || 'natural light'}.`,
     `${[clean(lens), clean(bible.render)].filter(Boolean).join(', ')}, aspect ratio ${format === 'shorts' ? '9:16' : '16:9'}.`,
     `STYLE BIBLE: ${clean(bible.block)}.`,
     `${cap(NEGATIVE)}.`,
   ];
-  return lines.join('\n');
+  return lines.filter(Boolean).join('\n');
+}
+
+// ───────── 멀티앵글 커버리지 (같은 순간을 여러 앵글로) ─────────
+export interface Variant {
+  label: string;
+  prompt: string;
+}
+
+const COVERAGE: { label: string; patch: Partial<Shot>; tech?: string; note?: string }[] = [
+  { label: '마스터 와이드', patch: { size: 'WS', angle: '아이', move: '고정', speed: '', endState: 'holding the full geography of the scene' }, tech: 'deep' },
+  { label: '리버스 앵글', patch: { angle: '아이' }, note: 'Reverse angle: camera placed 180 degrees opposite the main shot, same moment.' },
+  { label: '어깨 너머 OTS', patch: { size: 'MS', angle: '아이' }, tech: 'ots' },
+  { label: '클로즈업 CU', patch: { size: 'CU', move: '돌리인', speed: '느리게', endState: 'tight on the key emotion' }, tech: 'shallow' },
+  { label: '인서트 디테일', patch: { size: 'INSERT', angle: '탑', move: '고정', speed: '', endState: 'holding on the key detail' }, tech: 'rack' },
+  { label: '로우 히어로', patch: { size: 'MS', angle: '로우', move: '돌리인', speed: '느리게' }, tech: 'rim' },
+];
+
+export function buildCoverage(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = []): Variant[] {
+  return COVERAGE.map((c, i) => {
+    const v: Shot = { ...s, ...c.patch, techniques: c.tech ? [c.tech] : (s.techniques ?? []).filter((id) => !techById(id)?.moves) };
+    const head = `Coverage ${i + 1}/${COVERAGE.length} of the same moment — keep subject, wardrobe, setting and lighting identical.${c.note ? ' ' + c.note : ''}`;
+    return { label: c.label, prompt: `${head}\n${buildVideoPrompt(v, bible, format, chars)}` };
+  });
+}
+
+// ───────── 전환 브리지 (시작·끝 프레임 사이 연결 샷) ─────────
+const TRANS_EN: Record<Transition, string> = {
+  하드컷: '',
+  매치컷: 'match cut: the dominant shape and motion of the first frame morph seamlessly into the matching shape of the last frame',
+  빛변화: 'light transition: light floods and shifts across the frame until it becomes the next scene',
+  암전: 'fade through black: darkness swallows the frame, then the next scene emerges slowly from black',
+};
+
+export function buildBridge(a: Shot, b: Shot, bible: Bible, format: FormatKey): string | null {
+  const how = TRANS_EN[a.transition];
+  if (!how) return null;
+  return [
+    `Transition shot, 2 seconds, first frame to last frame, ${aspectOf(format)}.`,
+    `First frame: ${clean(a.subject) || 'previous subject'}, ${clean(a.setting) || 'previous setting'}, ${clean(a.lighting) || 'same light'}.`,
+    `Last frame: ${clean(b.subject) || 'next subject'}, ${clean(b.setting) || 'next setting'}, ${clean(b.lighting) || 'same light'}.`,
+    `Technique: ${how}.`,
+    `STYLE BIBLE: ${clean(bible.block)}.`,
+    `${cap(NEGATIVE)}.`,
+  ].join('\n');
+}
+
+// ───────── 캐릭터 디자인 시트 (Nano Banana 등 이미지 모델용) ─────────
+export function buildCharacterSheet(c: Character, bible: Bible): string {
+  return [
+    `Character design sheet of an original fictional character: ${clean(c.look) || 'character'}.`,
+    `Wardrobe: ${clean(c.wardrobe) || 'simple outfit'}. Signature detail: ${clean(c.signature) || 'none'}.`,
+    'Layout: full-body turnaround (front, three-quarter, side, back) in one row, plus a row of four close-up expressions or poses; consistent proportions and colors in every view.',
+    'Neutral light grey background, even soft studio lighting.',
+    `STYLE BIBLE: ${clean(bible.block)}.`,
+    `${cap(NEGATIVE)}.`,
+  ].join('\n');
 }
 
 // ───────── QC·크레딧 ─────────
@@ -407,12 +522,13 @@ export function exportJson(p: Project) {
     exportedAt: new Date().toISOString(),
     brief: p.brief,
     bible: p.bible,
+    characters: p.characters.map((c) => ({ ...c, sheetPrompt: buildCharacterSheet(c, p.bible) })),
     credit: p.credit,
     shots: p.shots.map((s) => ({
       ...s,
       beatLabel: beatLabel(s.beat),
-      prompt: buildVideoPrompt(s, p.bible, p.brief.format),
-      imagePrompt: s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format) : null,
+      prompt: buildVideoPrompt(s, p.bible, p.brief.format, p.characters),
+      imagePrompt: s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format, p.characters) : null,
     })),
   };
 }
@@ -427,6 +543,9 @@ export function parseProject(text: string): Project {
     brief: { ...base.brief, ...d.brief },
     bible: { ...base.bible, ...(d.bible ?? {}) },
     credit: { ...base.credit, ...(d.credit ?? {}) },
+    characters: Array.isArray(d.characters)
+      ? d.characters.map(({ sheetPrompt: _s, ...c }: Character & { sheetPrompt?: string }) => c)
+      : base.characters,
     shots: d.shots.map((s: Partial<Shot>, i: number) => {
       const { prompt: _p, imagePrompt: _i, beatLabel: _b, ...rest } = s as Record<string, unknown>;
       return { ...blankShot(i), ...rest } as Shot;
@@ -445,8 +564,8 @@ export function exportMarkdown(p: Project): string {
     `- 주제: ${b.topic || '-'}`,
     ...b.facts.filter(Boolean).map((f, i) => `- 핵심 사실 ${i + 1}: ${f}`),
     '',
-    '| 샷ID | 비트 | 목적 | 샷크기 | 앵글 | 카메라무브 | 피사체·동작 | 조명·시간 | 전환 | 초 | 모델 | 키프레임 |',
-    '|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| 샷ID | 비트 | 목적 | 샷크기 | 앵글 | 카메라무브 | 피사체·동작 | 조명·시간 | 연출 기법 | 전환 | 초 | 모델 | 키프레임 |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const rows = p.shots.map((s) =>
     `| ${[
@@ -458,6 +577,7 @@ export function exportMarkdown(p: Project): string {
       [s.move || '미지정', s.speed, s.endState].filter(Boolean).join(' / '),
       `${s.subject} — ${s.action}`,
       `${s.setting}; ${s.lighting}`,
+      (s.techniques ?? []).map((id) => techById(id)?.ko).filter(Boolean).join(', ') || '-',
       s.transition,
       s.seconds,
       s.model,
@@ -470,9 +590,9 @@ export function exportMarkdown(p: Project): string {
     '',
     `### ${s.id} 영상 프롬프트`,
     '```',
-    buildVideoPrompt(s, p.bible, b.format),
+    buildVideoPrompt(s, p.bible, b.format, p.characters),
     '```',
-    ...(s.keyframe ? ['', `### ${s.id} 키프레임 이미지 프롬프트`, '```', buildImagePrompt(s, p.bible, b.format), '```'] : []),
+    ...(s.keyframe ? ['', `### ${s.id} 키프레임 이미지 프롬프트`, '```', buildImagePrompt(s, p.bible, b.format, p.characters), '```'] : []),
   ]);
   return [...head, ...rows, '', '## 프롬프트', ...prompts, ''].join('\n');
 }
