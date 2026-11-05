@@ -185,3 +185,90 @@ describe('연출 기법·캐릭터·커버리지·전환', () => {
     expect(t).toContain('raccoon');
   });
 });
+
+import {
+  buildAudioCue,
+  buildEditCsv,
+  buildLocationSheet,
+  buildLocationTour,
+  buildRegenPrompt,
+  buildScenarioRequest,
+  parseScenarioResponse,
+} from './director';
+
+describe('디렉터 도구 (월드·결함·시나리오·오디오·편집)', () => {
+  const p = defaultProject('A');
+
+  it('로케이션 고정 줄과 화면 방향이 프롬프트에 들어간다', () => {
+    const s = { ...p.shots[0], screenDir: '좌→우' as const };
+    const v = buildVideoPrompt(s, p.bible, 'shorts', p.characters, p.locations);
+    expect(v).toContain('Location lock: colossal ancient temple');
+    expect(v).toContain('moving left to right across the frame.');
+  });
+
+  it('180도 규칙: 연속 샷 화면 방향 반전 경고, 암전 뒤는 허용', () => {
+    const s = defaultShots('A');
+    s[2].screenDir = '좌→우';
+    s[3].screenDir = '우→좌';
+    expect(checkRules(s).find((w) => w.rule === 'axisFlip')?.shotIds).toEqual(['S03', 'S04']);
+    s[2].transition = '암전';
+    expect(checkRules(s).some((w) => w.rule === 'axisFlip')).toBe(false);
+  });
+
+  it('월드 시트·카메라 투어 5종', () => {
+    expect(buildLocationSheet(p.locations[0], p.bible)).toContain('no people');
+    expect(buildLocationTour(p.locations[0], p.bible, 'shorts')).toHaveLength(5);
+  });
+
+  it('결함 태그 → 보정 줄 추가, 태그 없으면 원본 유지', () => {
+    const s = { ...p.shots[0], defects: ['hands', 'camera'] };
+    const r = buildRegenPrompt('BASE', s);
+    expect(r).toContain('Fix from previous take: anatomically correct hands');
+    expect(r).toContain('크레인');
+    expect(buildRegenPrompt('BASE', p.shots[0])).toBe('BASE');
+  });
+
+  it('시나리오 요청문에 규칙·스키마·캐릭터가 들어간다', () => {
+    const t = buildScenarioRequest(p);
+    expect(t).toContain('exactly 8 shots');
+    expect(t).toContain('Character C1');
+    expect(t).toContain('Location L1');
+  });
+
+  it('LLM 답변 파싱: 코드펜스·잡담 제거, 잘못된 값 교정', () => {
+    const answer = `물론이죠! 아래가 콘티입니다.\n\`\`\`json\n[{"id":"S01","beat":"hook","size":"XL","angle":"로우","move":"크레인","speed":"느리게","subject":"A lantern","action":"flickers","seconds":4,"keyframe":true,"techniques":["silhouette","nope"],"characterId":"C1","locationId":"L9"}]\n\`\`\`\n도움이 되셨길!`;
+    const { shots, issues } = parseScenarioResponse(answer, p);
+    expect(shots).toHaveLength(1);
+    expect(shots[0].size).toBe('MS'); // XL → 기본값
+    expect(shots[0].techniques).toEqual(['silhouette']);
+    expect(shots[0].characterId).toBe('C1');
+    expect(shots[0].locationId).toBe('');
+    expect(shots[0].keyframe).toBe(true);
+    expect(issues.some((x) => x.startsWith('S01.size'))).toBe(true);
+    expect(() => parseScenarioResponse('JSON 없음', p)).toThrow();
+  });
+
+  it('오디오 큐시트·편집 CSV', () => {
+    const a = buildAudioCue(p);
+    expect(a).toContain('no vocals');
+    expect(a).toContain('S01 [00:00.0-00:03.0]');
+    const csv = buildEditCsv(p);
+    expect(csv.startsWith('﻿')).toBe(true);
+    expect(csv.split('\r\n')).toHaveLength(9);
+  });
+
+  it('JSON 왕복 시 로케이션 유지', () => {
+    const back = parseProject(JSON.stringify(exportJson(p)));
+    expect(back.locations[0].id).toBe('L1');
+    expect(back.shots[0].locationId).toBe('L1');
+  });
+});
+
+import { safeFileName } from './director';
+describe('파일명', () => {
+  it('영문·숫자만 남기고 C 식별자+타임스탬프', () => {
+    const d = new Date(2026, 10, 5, 9, 7);
+    expect(safeFileName('잊힌 신전 Ep.1', 'json', d)).toBe('flow_Ep-1_C_20261105-0907.json');
+    expect(safeFileName('', 'csv', d)).toBe('flow_series_C_20261105-0907.csv');
+  });
+});

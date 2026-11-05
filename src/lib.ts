@@ -11,6 +11,7 @@ export type Transition = '하드컷' | '매치컷' | '빛변화' | '암전';
 export type Model = 'Lite' | 'Fast' | 'Quality' | 'Omni';
 export type Status = '대기' | '생성' | '채택' | '재생성' | '폐기';
 export type BeatKey = 'hook' | 'context' | 'develop' | 'twist' | 'resolve' | 'cta';
+export type ScreenDir = '' | '좌→우' | '우→좌' | '카메라로' | '멀어짐';
 
 export interface Brief {
   series: string;
@@ -49,6 +50,10 @@ export interface Shot {
   keyframe: boolean;
   techniques: string[]; // 연출 기법 id
   characterId: string; // '' = 없음
+  locationId: string; // '' = 없음
+  screenDir: ScreenDir; // 화면 진행 방향 (180도 규칙)
+  sfx: string; // 효과음 메모 (비우면 자동)
+  defects: string[]; // 생성 결과 결함 태그
   // 생성 기록
   status: Status;
   credits: number;
@@ -69,10 +74,18 @@ export interface Character {
   signature: string;
 }
 
+export interface Location {
+  id: string;
+  name: string; // 한국어 라벨
+  place: string;
+  details: string;
+}
+
 export interface Project {
   brief: Brief;
   bible: Bible;
   characters: Character[];
+  locations: Location[];
   shots: Shot[];
   credit: CreditState;
 }
@@ -85,6 +98,7 @@ export const SPEEDS: Speed[] = ['', '느리게', '보통', '빠르게'];
 export const TRANSITIONS: Transition[] = ['하드컷', '매치컷', '빛변화', '암전'];
 export const MODELS: Model[] = ['Lite', 'Fast', 'Quality', 'Omni'];
 export const STATUSES: Status[] = ['대기', '생성', '채택', '재생성', '폐기'];
+export const SCREEN_DIRS: ScreenDir[] = ['', '좌→우', '우→좌', '카메라로', '멀어짐'];
 export const QC_LABELS = ['의도', '연속성', '움직임', '결함', '사용구간 2초↑'] as const;
 
 export const BEATS: { key: BeatKey; label: string; from: number; to: number }[] = [
@@ -204,6 +218,21 @@ export const CHARACTERS: Record<PresetKey, Character[]> = {
   ],
   C: [],
 };
+export const LOCATIONS: Record<PresetKey, Location[]> = {
+  A: [
+    { id: 'L1', name: '지하 신전', place: 'colossal ancient temple carved deep inside a mountain', details: 'weathered sandstone pillars, glyph-covered walls, hidden golden sacred-geometry chamber' },
+  ],
+  B: [
+    { id: 'L1', name: '구름왕국 부처 청사', place: 'Cloud Kingdom ministry building', details: 'beige 1990s government office interior, acorn-shaped emblems, grey filing cabinets, fluorescent ceiling panels' },
+  ],
+  C: [],
+};
+const LOC_MAP: Record<PresetKey, string[]> = {
+  A: ['L1', '', 'L1', 'L1', 'L1', 'L1', 'L1', ''],
+  B: ['L1', 'L1', 'L1', 'L1', '', 'L1', '', 'L1'],
+  C: ['', '', '', '', '', '', '', ''],
+};
+
 const CHAR_MAP: Record<PresetKey, string[]> = {
   A: ['C1', '', 'C1', '', '', 'C1', 'C1', ''],
   B: ['C1', '', '', 'C2', '', 'C2', '', 'C1'],
@@ -242,6 +271,10 @@ export function defaultShots(preset: PresetKey): Shot[] {
     keyframe: r[11],
     techniques: recommend(BEAT_LAYOUT[i], r[2]),
     characterId: CHAR_MAP[preset][i],
+    locationId: LOC_MAP[preset][i],
+    screenDir: '',
+    sfx: '',
+    defects: [],
     status: '대기',
     credits: 0,
     qc: [0, 0, 0, 0, 0],
@@ -269,6 +302,10 @@ export function blankShot(index: number): Shot {
     keyframe: false,
     techniques: [],
     characterId: '',
+    locationId: '',
+    screenDir: '',
+    sfx: '',
+    defects: [],
     status: '대기',
     credits: 0,
     qc: [0, 0, 0, 0, 0],
@@ -287,6 +324,7 @@ export function defaultProject(preset: PresetKey = 'A'): Project {
     },
     bible: { ...BIBLES[preset] },
     characters: CHARACTERS[preset].map((c) => ({ ...c })),
+    locations: LOCATIONS[preset].map((l) => ({ ...l })),
     shots: defaultShots(preset),
     credit: { start: 1050, pastUsed: 0, pastEpisodes: 0 },
   };
@@ -294,7 +332,7 @@ export function defaultProject(preset: PresetKey = 'A'): Project {
 
 // ───────── 규칙 경고 ─────────
 export interface Warning {
-  rule: 'sameSize' | 'noMove' | 'fewFixed' | 'multiAction' | 'noInsert' | 'techConflict';
+  rule: 'sameSize' | 'noMove' | 'fewFixed' | 'multiAction' | 'noInsert' | 'techConflict' | 'axisFlip';
   shotIds: string[];
   message: string;
 }
@@ -341,6 +379,17 @@ export function checkRules(shots: Shot[]): Warning[] {
       }
     }
   }
+  const lateral = (d: ScreenDir | undefined) => d === '좌→우' || d === '우→좌';
+  for (let i = 1; i < shots.length; i++) {
+    const [a, b] = [shots[i - 1], shots[i]];
+    if (lateral(a.screenDir) && lateral(b.screenDir) && a.screenDir !== b.screenDir && a.transition !== '암전') {
+      w.push({
+        rule: 'axisFlip',
+        shotIds: [a.id, b.id],
+        message: `${a.id}→${b.id}: 화면 방향 반전(${a.screenDir} → ${b.screenDir}) — 180도 규칙 위반 가능. 의도라면 사이에 정면샷(카메라로)을 넣거나 암전으로 끊으세요`,
+      });
+    }
+  }
   if (shots.length > 0 && !shots.some((s) => s.size === 'INSERT')) {
     w.push({ rule: 'noInsert', shotIds: [], message: '씬에 INSERT 샷이 0개 — 최소 1개 넣으세요' });
   }
@@ -364,6 +413,8 @@ export function findRealNames(text: string): string[] {
 export function projectRealNames(p: Project): string[] {
   const parts = [p.brief.series, p.brief.channel, p.brief.topic, ...p.brief.facts];
   for (const c of p.characters ?? []) parts.push(c.name, c.look, c.wardrobe, c.signature);
+  for (const l of p.locations ?? []) parts.push(l.name, l.place, l.details);
+  for (const s of p.shots) parts.push(s.sfx ?? '');
   for (const s of p.shots) parts.push(s.subject, s.action, s.setting, s.lighting, s.endState, s.purpose);
   return [...new Set(findRealNames(parts.join(' \n ')))];
 }
@@ -396,12 +447,29 @@ export function characterLine(s: Shot, chars: Character[] = []): string {
   return `Character lock: ${bits.join(', ')}; keep the exact same design in every shot.`;
 }
 
-export function buildVideoPrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = []): string {
+export function locationLine(s: Shot, locs: Location[] = []): string {
+  const l = locs.find((x) => x.id === s.locationId);
+  if (!l) return '';
+  return `Location lock: ${[clean(l.place), clean(l.details)].filter(Boolean).join(', ')}; keep the same layout, materials and landmarks in every shot.`;
+}
+
+const DIR_EN: Record<ScreenDir, string> = {
+  '': '',
+  '좌→우': 'moving left to right across the frame',
+  '우→좌': 'moving right to left across the frame',
+  카메라로: 'moving toward the camera',
+  멀어짐: 'moving away from the camera',
+};
+export const dirClause = (s: Shot) => (s.screenDir ? DIR_EN[s.screenDir] : '');
+
+export function buildVideoPrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = [], locs: Location[] = []): string {
   const lens = isClose(s.size) ? bible.lensClose : bible.lensWide;
+  const dir = dirClause(s);
   const lines = [
     cameraClause(s),
-    `${cap(clean(s.subject) || 'The subject')} ${clean(s.action) || 'holds still'}.`,
+    `${cap(clean(s.subject) || 'The subject')} ${clean(s.action) || 'holds still'}${dir ? ', ' + dir : ''}.`,
     characterLine(s, chars),
+    locationLine(s, locs),
     `Setting: ${clean(s.setting) || 'as established'}; lighting and time: ${clean(s.lighting) || 'natural light'}.`,
     `Lens and render: ${[clean(lens), clean(bible.render), aspectOf(format)].filter(Boolean).join(', ')}.`,
     techniqueLine(s),
@@ -411,13 +479,14 @@ export function buildVideoPrompt(s: Shot, bible: Bible, format: FormatKey, chars
   return lines.filter(Boolean).join('\n');
 }
 
-export function buildImagePrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = []): string {
+export function buildImagePrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = [], locs: Location[] = []): string {
   const lens = isClose(s.size) ? bible.lensClose : bible.lensWide;
   const still = (s.techniques ?? []).map((id) => techById(id)).filter((t) => t && t.cat !== '카메라' && t.cat !== '속도·질감');
   const lines = [
     `Cinematic still keyframe (first frame), ${SIZE_EN[s.size]}, ${ANGLE_EN[s.angle]}.`,
     `${cap(clean(s.subject) || 'The subject')}, at the moment just before it ${clean(s.action) || 'moves'}.`,
     characterLine(s, chars),
+    locationLine(s, locs),
     still.length ? `Cinematography: ${still.map((t) => t!.en).join('; ')}.` : '',
     `Setting: ${clean(s.setting) || 'as established'}; lighting and time: ${clean(s.lighting) || 'natural light'}.`,
     `${[clean(lens), clean(bible.render)].filter(Boolean).join(', ')}, aspect ratio ${format === 'shorts' ? '9:16' : '16:9'}.`,
@@ -442,11 +511,11 @@ const COVERAGE: { label: string; patch: Partial<Shot>; tech?: string; note?: str
   { label: '로우 히어로', patch: { size: 'MS', angle: '로우', move: '돌리인', speed: '느리게' }, tech: 'rim' },
 ];
 
-export function buildCoverage(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = []): Variant[] {
+export function buildCoverage(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = [], locs: Location[] = []): Variant[] {
   return COVERAGE.map((c, i) => {
     const v: Shot = { ...s, ...c.patch, techniques: c.tech ? [c.tech] : (s.techniques ?? []).filter((id) => !techById(id)?.moves) };
     const head = `Coverage ${i + 1}/${COVERAGE.length} of the same moment — keep subject, wardrobe, setting and lighting identical.${c.note ? ' ' + c.note : ''}`;
-    return { label: c.label, prompt: `${head}\n${buildVideoPrompt(v, bible, format, chars)}` };
+    return { label: c.label, prompt: `${head}\n${buildVideoPrompt(v, bible, format, chars, locs)}` };
   });
 }
 
@@ -523,12 +592,13 @@ export function exportJson(p: Project) {
     brief: p.brief,
     bible: p.bible,
     characters: p.characters.map((c) => ({ ...c, sheetPrompt: buildCharacterSheet(c, p.bible) })),
+    locations: p.locations,
     credit: p.credit,
     shots: p.shots.map((s) => ({
       ...s,
       beatLabel: beatLabel(s.beat),
-      prompt: buildVideoPrompt(s, p.bible, p.brief.format, p.characters),
-      imagePrompt: s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format, p.characters) : null,
+      prompt: buildVideoPrompt(s, p.bible, p.brief.format, p.characters, p.locations),
+      imagePrompt: s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format, p.characters, p.locations) : null,
     })),
   };
 }
@@ -546,6 +616,7 @@ export function parseProject(text: string): Project {
     characters: Array.isArray(d.characters)
       ? d.characters.map(({ sheetPrompt: _s, ...c }: Character & { sheetPrompt?: string }) => c)
       : base.characters,
+    locations: Array.isArray(d.locations) ? d.locations : base.locations,
     shots: d.shots.map((s: Partial<Shot>, i: number) => {
       const { prompt: _p, imagePrompt: _i, beatLabel: _b, ...rest } = s as Record<string, unknown>;
       return { ...blankShot(i), ...rest } as Shot;
@@ -590,9 +661,9 @@ export function exportMarkdown(p: Project): string {
     '',
     `### ${s.id} 영상 프롬프트`,
     '```',
-    buildVideoPrompt(s, p.bible, b.format, p.characters),
+    buildVideoPrompt(s, p.bible, b.format, p.characters, p.locations),
     '```',
-    ...(s.keyframe ? ['', `### ${s.id} 키프레임 이미지 프롬프트`, '```', buildImagePrompt(s, p.bible, b.format, p.characters), '```'] : []),
+    ...(s.keyframe ? ['', `### ${s.id} 키프레임 이미지 프롬프트`, '```', buildImagePrompt(s, p.bible, b.format, p.characters, p.locations), '```'] : []),
   ]);
   return [...head, ...rows, '', '## 프롬프트', ...prompts, ''].join('\n');
 }
