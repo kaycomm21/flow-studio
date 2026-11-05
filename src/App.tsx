@@ -1,0 +1,477 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ANGLES,
+  BEATS,
+  BIBLES,
+  MODELS,
+  MOVES,
+  QC_LABELS,
+  SIZES,
+  SPEEDS,
+  STATUSES,
+  TRANSITIONS,
+  beatLabel,
+  blankShot,
+  buildImagePrompt,
+  buildVideoPrompt,
+  checkRules,
+  creditSummary,
+  defaultProject,
+  defaultShots,
+  exportJson,
+  exportMarkdown,
+  needsRegen,
+  parseProject,
+  projectRealNames,
+  qcAverage,
+  type PresetKey,
+  type Project,
+  type Shot,
+} from './lib';
+
+const KEY = 'flow-studio-v1';
+const TABS = ['브리프', '콘티', '프롬프트', '기록·크레딧'] as const;
+type Tab = (typeof TABS)[number];
+
+function load(): Project {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) return parseProject(raw);
+  } catch {
+    /* 저장소 없음/손상 → 기본값 */
+  }
+  return defaultProject('A');
+}
+
+function download(name: string, text: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  }
+}
+
+export default function App() {
+  const [p, setP] = useState<Project>(load);
+  const [tab, setTab] = useState<Tab>('브리프');
+  const [toast, setToast] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(p));
+    } catch {
+      /* 무시 */
+    }
+  }, [p]);
+
+  const warnings = useMemo(() => checkRules(p.shots), [p.shots]);
+  const realNames = useMemo(() => projectRealNames(p), [p]);
+  const flagged = useMemo(() => new Set(warnings.flatMap((w) => w.shotIds)), [warnings]);
+
+  const say = (m: string) => {
+    setToast(m);
+    setTimeout(() => setToast(''), 1600);
+  };
+  const copy = async (t: string, label = '복사됨') => say((await copyText(t)) ? `✅ ${label}` : '⚠️ 복사 실패');
+
+  const setBrief = (patch: Partial<Project['brief']>) => setP((x) => ({ ...x, brief: { ...x.brief, ...patch } }));
+  const setShot = (i: number, patch: Partial<Shot>) =>
+    setP((x) => ({ ...x, shots: x.shots.map((s, j) => (j === i ? { ...s, ...patch } : s)) }));
+
+  const applyPreset = (k: PresetKey) => {
+    if (!confirm(`프리셋 ${BIBLES[k].name}로 바꾸고 8샷을 다시 배치할까요?\n(현재 샷 내용은 덮어씁니다)`)) return;
+    setP((x) => ({ ...x, brief: { ...x.brief, preset: k }, bible: { ...BIBLES[k] }, shots: defaultShots(k) }));
+    say('✅ 프리셋 적용 + 8샷 자동 배치');
+  };
+
+  const onImport = async (f: File | undefined) => {
+    if (!f) return;
+    try {
+      setP(parseProject(await f.text()));
+      say('✅ 불러오기 완료');
+    } catch (e) {
+      alert('불러오기 실패: ' + (e as Error).message);
+    }
+  };
+
+  const fname = (ext: string) =>
+    `${(p.brief.series || 'flow-series').replace(/[\\/:*?"<>|\s]+/g, '_')}_ⓒ_${new Date()
+      .toISOString()
+      .slice(0, 16)
+      .replace(/[-:T]/g, '')}.${ext}`;
+
+  const allPrompts = p.shots
+    .map((s) => {
+      const v = `### ${s.id} (${beatLabel(s.beat)}, ${s.seconds}s, ${s.model})\n${buildVideoPrompt(s, p.bible, p.brief.format)}`;
+      return s.keyframe ? `${v}\n\n### ${s.id} 키프레임(Nano Banana)\n${buildImagePrompt(s, p.bible, p.brief.format)}` : v;
+    })
+    .join('\n\n');
+
+  const cs = creditSummary(p.credit, p.shots);
+  const pct = Math.max(0, Math.min(100, p.credit.start > 0 ? (cs.remaining / p.credit.start) * 100 : 0));
+  const totalSec = p.shots.reduce((a, s) => a + (Number(s.seconds) || 0), 0);
+
+  return (
+    <div className="app">
+      <header>
+        <h1>🎬 Flow 콘티 스튜디오</h1>
+        <nav>
+          {TABS.map((t) => (
+            <button key={t} className={t === tab ? 'on' : ''} onClick={() => setTab(t)}>
+              {t}
+              {t === '콘티' && warnings.length > 0 && <span className="badge">{warnings.length}</span>}
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      {realNames.length > 0 && (
+        <div className="alert">
+          ⚠️ 실존 인물·정당으로 보이는 이름이 있습니다: <b>{realNames.join(', ')}</b> — 가상 인물/단체로 바꾸세요.
+        </div>
+      )}
+
+      <main>
+        {tab === '브리프' && (
+          <section className="card form">
+            <label>
+              시리즈명
+              <input value={p.brief.series} onChange={(e) => setBrief({ series: e.target.value })} placeholder="예: 잊힌 신전 미스터리" />
+            </label>
+            <label>
+              채널
+              <input value={p.brief.channel} onChange={(e) => setBrief({ channel: e.target.value })} placeholder="예: 경제적 자유구역" />
+            </label>
+            <div className="field">
+              장르 프리셋
+              <div className="seg">
+                {(['A', 'B', 'C'] as PresetKey[]).map((k) => (
+                  <button key={k} className={p.brief.preset === k ? 'on' : ''} onClick={() => applyPreset(k)}>
+                    {BIBLES[k].name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="field">
+              포맷
+              <div className="seg">
+                <button className={p.brief.format === 'shorts' ? 'on' : ''} onClick={() => setBrief({ format: 'shorts' })}>
+                  쇼츠 60초 9:16
+                </button>
+                <button className={p.brief.format === 'long' ? 'on' : ''} onClick={() => setBrief({ format: 'long' })}>
+                  롱폼 16:9
+                </button>
+              </div>
+            </div>
+            <label>
+              주제 한 줄
+              <input value={p.brief.topic} onChange={(e) => setBrief({ topic: e.target.value })} placeholder="예: 산속 지하에 숨겨진 황금 기하학 신전" />
+            </label>
+            {p.brief.facts.map((f, i) => (
+              <label key={i}>
+                핵심 사실 {i + 1}
+                <input
+                  value={f}
+                  onChange={(e) => {
+                    const facts = [...p.brief.facts] as Project['brief']['facts'];
+                    facts[i] = e.target.value;
+                    setBrief({ facts });
+                  }}
+                />
+              </label>
+            ))}
+            <label>
+              STYLE BIBLE (프롬프트에 그대로 들어감 · 수정 가능)
+              <textarea rows={4} value={p.bible.block} onChange={(e) => setP((x) => ({ ...x, bible: { ...x.bible, block: e.target.value } }))} />
+            </label>
+            <div className="row">
+              <label>
+                렌즈(와이드)
+                <input value={p.bible.lensWide} onChange={(e) => setP((x) => ({ ...x, bible: { ...x.bible, lensWide: e.target.value } }))} />
+              </label>
+              <label>
+                렌즈(CU·INSERT)
+                <input value={p.bible.lensClose} onChange={(e) => setP((x) => ({ ...x, bible: { ...x.bible, lensClose: e.target.value } }))} />
+              </label>
+            </div>
+            <div className="row wrap">
+              <button onClick={() => download(fname('json'), JSON.stringify(exportJson(p), null, 2), 'application/json')}>⬇️ JSON 내보내기</button>
+              <button onClick={() => fileRef.current?.click()}>📂 JSON 불러오기</button>
+              <button onClick={() => download(fname('md'), exportMarkdown(p), 'text/markdown')}>⬇️ Markdown 콘티</button>
+              <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => onImport(e.target.files?.[0])} />
+            </div>
+          </section>
+        )}
+
+        {tab === '콘티' && (
+          <section>
+            <div className="beats">
+              {BEATS.map((b) => (
+                <div key={b.key} className="beat">
+                  <b>{b.label}</b>
+                  <span>
+                    {b.from}–{b.to}초
+                  </span>
+                  <small>{p.shots.filter((s) => s.beat === b.key).map((s) => s.id).join(' ') || '—'}</small>
+                </div>
+              ))}
+            </div>
+            <div className={warnings.length ? 'warns' : 'ok'}>
+              {warnings.length === 0 ? '✅ 규칙 경고 없음' : warnings.map((w, i) => <span key={i} className="red">{w.message}</span>)}
+            </div>
+            <div className="row wrap">
+              <span className="muted">총 {totalSec}초 / 목표 {p.brief.format === 'shorts' ? '60' : '—'}초 · 피사체/동작/장소/조명은 영어로 쓰면 그대로 프롬프트에 들어갑니다</span>
+              <button onClick={() => setP((x) => ({ ...x, shots: [...x.shots, blankShot(x.shots.length)] }))}>+ 샷 추가</button>
+              <button onClick={() => applyPreset(p.brief.preset)}>↺ 8샷 자동 배치</button>
+            </div>
+            <div className="tablewrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>샷ID</th>
+                    <th>비트</th>
+                    <th>목적</th>
+                    <th>샷크기</th>
+                    <th>앵글</th>
+                    <th>카메라무브·속도·끝상태</th>
+                    <th>피사체 · 동작 1개</th>
+                    <th>장소 · 조명·시간</th>
+                    <th>전환</th>
+                    <th>초</th>
+                    <th>모델</th>
+                    <th>KF</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {p.shots.map((s, i) => (
+                    <tr key={i} className={flagged.has(s.id) ? 'flag' : ''}>
+                      <td>
+                        <input className="w4" value={s.id} onChange={(e) => setShot(i, { id: e.target.value })} />
+                      </td>
+                      <td>
+                        <select value={s.beat} onChange={(e) => setShot(i, { beat: e.target.value as Shot['beat'] })}>
+                          {BEATS.map((b) => (
+                            <option key={b.key} value={b.key}>
+                              {b.label}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <select value={s.purposeType} onChange={(e) => setShot(i, { purposeType: e.target.value as Shot['purposeType'] })}>
+                          <option>질문</option>
+                          <option>답</option>
+                        </select>
+                        <input value={s.purpose} onChange={(e) => setShot(i, { purpose: e.target.value })} />
+                      </td>
+                      <td>
+                        <Sel v={s.size} opts={SIZES} on={(v) => setShot(i, { size: v })} />
+                      </td>
+                      <td>
+                        <Sel v={s.angle} opts={ANGLES} on={(v) => setShot(i, { angle: v })} />
+                      </td>
+                      <td>
+                        <div className="row">
+                          <Sel v={s.move} opts={MOVES} on={(v) => setShot(i, { move: v })} empty="(미지정)" bad={!s.move} />
+                          <Sel v={s.speed} opts={SPEEDS} on={(v) => setShot(i, { speed: v })} empty="속도" />
+                        </div>
+                        <input value={s.endState} placeholder="끝상태 (ending ...)" onChange={(e) => setShot(i, { endState: e.target.value })} />
+                      </td>
+                      <td>
+                        <input value={s.subject} placeholder="subject" onChange={(e) => setShot(i, { subject: e.target.value })} />
+                        <input
+                          value={s.action}
+                          placeholder="ONE action"
+                          className={/그리고|\band\b|&/i.test(s.action) ? 'bad' : ''}
+                          onChange={(e) => setShot(i, { action: e.target.value })}
+                        />
+                      </td>
+                      <td>
+                        <input value={s.setting} placeholder="setting" onChange={(e) => setShot(i, { setting: e.target.value })} />
+                        <input value={s.lighting} placeholder="lighting, time" onChange={(e) => setShot(i, { lighting: e.target.value })} />
+                      </td>
+                      <td>
+                        <Sel v={s.transition} opts={TRANSITIONS} on={(v) => setShot(i, { transition: v })} />
+                      </td>
+                      <td>
+                        <input className="w3" type="number" min={0} step={0.5} value={s.seconds} onChange={(e) => setShot(i, { seconds: Number(e.target.value) })} />
+                      </td>
+                      <td>
+                        <Sel v={s.model} opts={MODELS} on={(v) => setShot(i, { model: v })} />
+                      </td>
+                      <td>
+                        <select value={s.keyframe ? 'Y' : 'N'} onChange={(e) => setShot(i, { keyframe: e.target.value === 'Y' })}>
+                          <option>Y</option>
+                          <option>N</option>
+                        </select>
+                      </td>
+                      <td>
+                        <button className="x" title="삭제" onClick={() => confirm(`${s.id} 삭제?`) && setP((x) => ({ ...x, shots: x.shots.filter((_, j) => j !== i) }))}>
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {tab === '프롬프트' && (
+          <section>
+            <div className="row wrap">
+              <button className="primary" onClick={() => copy(allPrompts, `전체 ${p.shots.length}샷 복사됨`)}>
+                📋 전체 복사
+              </button>
+              <span className="muted">{p.bible.name} · {p.brief.format === 'shorts' ? '9:16' : '16:9'}</span>
+            </div>
+            {p.shots.map((s, i) => {
+              const v = buildVideoPrompt(s, p.bible, p.brief.format);
+              const img = s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format) : '';
+              return (
+                <div key={i} className={`card ${flagged.has(s.id) ? 'flagcard' : ''}`}>
+                  <div className="cardhead">
+                    <b>
+                      {s.id} · {beatLabel(s.beat)} · {s.size} · {s.seconds}s · {s.model}
+                    </b>
+                    {flagged.has(s.id) && <span className="red">규칙 경고</span>}
+                    <button onClick={() => copy(v, `${s.id} 복사됨`)}>복사</button>
+                  </div>
+                  <pre>{v}</pre>
+                  {img && (
+                    <>
+                      <div className="cardhead">
+                        <b>🖼 키프레임 (Nano Banana)</b>
+                        <button onClick={() => copy(img, `${s.id} 키프레임 복사됨`)}>복사</button>
+                      </div>
+                      <pre className="img">{img}</pre>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        {tab === '기록·크레딧' && (
+          <section>
+            <div className="card">
+              <div className="row wrap">
+                <label>
+                  시작 크레딧
+                  <input type="number" value={p.credit.start} onChange={(e) => setP((x) => ({ ...x, credit: { ...x.credit, start: Number(e.target.value) } }))} />
+                </label>
+                <label>
+                  이전 편 누적 사용
+                  <input type="number" value={p.credit.pastUsed} onChange={(e) => setP((x) => ({ ...x, credit: { ...x.credit, pastUsed: Number(e.target.value) } }))} />
+                </label>
+                <label>
+                  이전 완성 편수
+                  <input type="number" value={p.credit.pastEpisodes} onChange={(e) => setP((x) => ({ ...x, credit: { ...x.credit, pastEpisodes: Number(e.target.value) } }))} />
+                </label>
+              </div>
+              <div className="bar">
+                <div style={{ width: `${pct}%` }} className={pct < 20 ? 'low' : ''} />
+              </div>
+              <div className="stats">
+                <div>
+                  <small>잔량</small>
+                  <b className={cs.remaining < 0 ? 'neg' : ''}>{cs.remaining.toLocaleString()}</b>
+                </div>
+                <div>
+                  <small>이번 편 사용</small>
+                  <b>{cs.currentUsed.toLocaleString()}</b>
+                </div>
+                <div>
+                  <small>1편 평균 단가</small>
+                  <b>{cs.avgPerEpisode ? Math.round(cs.avgPerEpisode).toLocaleString() : '—'}</b>
+                </div>
+                <div>
+                  <small>남은 크레딧으로 가능</small>
+                  <b>{cs.possibleEpisodes === null ? '—' : `${cs.possibleEpisodes}편`}</b>
+                </div>
+              </div>
+            </div>
+            {p.shots.map((s, i) => {
+              const avg = qcAverage(s.qc);
+              const regen = needsRegen(s.qc);
+              return (
+                <div key={i} className={`card rec ${regen ? 'flagcard' : ''}`}>
+                  <div className="cardhead">
+                    <b>
+                      {s.id} · {beatLabel(s.beat)} · {s.model}
+                    </b>
+                    {regen && <span className="red">재생성 필요 (QC {avg!.toFixed(1)})</span>}
+                    {!regen && avg !== null && <span className="green">QC {avg.toFixed(1)}</span>}
+                  </div>
+                  <div className="row wrap">
+                    <Sel v={s.status} opts={STATUSES} on={(v) => setShot(i, { status: v })} />
+                    <label className="inline">
+                      사용 크레딧
+                      <input className="w5" type="number" min={0} value={s.credits} onChange={(e) => setShot(i, { credits: Number(e.target.value) })} />
+                    </label>
+                  </div>
+                  <div className="qc">
+                    {QC_LABELS.map((l, q) => (
+                      <label key={l}>
+                        {l}
+                        <select
+                          value={s.qc[q]}
+                          onChange={(e) => {
+                            const qc = [...s.qc] as Shot['qc'];
+                            qc[q] = Number(e.target.value);
+                            setShot(i, { qc });
+                          }}
+                        >
+                          <option value={0}>-</option>
+                          {[1, 2, 3, 4, 5].map((n) => (
+                            <option key={n} value={n}>
+                              {n}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        )}
+      </main>
+      <footer className="muted">서버·API 키 없음 · 이 브라우저(localStorage)에만 저장됩니다 · 백업은 JSON 내보내기</footer>
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+function Sel<T extends string>({ v, opts, on, empty, bad }: { v: T; opts: readonly T[]; on: (v: T) => void; empty?: string; bad?: boolean }) {
+  return (
+    <select value={v} className={bad ? 'bad' : ''} onChange={(e) => on(e.target.value as T)}>
+      {opts.map((o) => (
+        <option key={o} value={o}>
+          {o || empty || '-'}
+        </option>
+      ))}
+    </select>
+  );
+}
