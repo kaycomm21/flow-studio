@@ -281,6 +281,14 @@ export function defaultShots(preset: PresetKey): Shot[] {
   }));
 }
 
+/** 기존 ID와 겹치지 않는 다음 샷 ID (삭제 후 추가해도 중복 없음) */
+export function nextShotId(shots: Shot[]): string {
+  const used = new Set(shots.map((s) => s.id));
+  let n = shots.length + 1;
+  while (used.has(`S${String(n).padStart(2, '0')}`)) n++;
+  return `S${String(n).padStart(2, '0')}`;
+}
+
 export function blankShot(index: number): Shot {
   return {
     id: `S${String(index + 1).padStart(2, '0')}`,
@@ -332,7 +340,7 @@ export function defaultProject(preset: PresetKey = 'A'): Project {
 
 // ───────── 규칙 경고 ─────────
 export interface Warning {
-  rule: 'sameSize' | 'noMove' | 'fewFixed' | 'multiAction' | 'noInsert' | 'techConflict' | 'axisFlip';
+  rule: 'sameSize' | 'noMove' | 'fewFixed' | 'multiAction' | 'noInsert' | 'techConflict' | 'axisFlip' | 'dupId' | 'overLength';
   shotIds: string[];
   message: string;
 }
@@ -343,8 +351,13 @@ export function hasMultipleActions(action: string): boolean {
   return MULTI_ACTION.test(action);
 }
 
-export function checkRules(shots: Shot[]): Warning[] {
+export function checkRules(shots: Shot[], format: FormatKey = 'shorts'): Warning[] {
   const w: Warning[] = [];
+  const seen = new Map<string, number>();
+  for (const s of shots) seen.set(s.id, (seen.get(s.id) ?? 0) + 1);
+  for (const [id, n] of seen) if (n > 1) w.push({ rule: 'dupId', shotIds: [id], message: `${id}: 샷ID 중복 ${n}개 — ID를 다르게 바꾸세요` });
+  const total = shots.reduce((a, s) => a + (Number(s.seconds) || 0), 0);
+  if (format === 'shorts' && total > 60) w.push({ rule: 'overLength', shotIds: [], message: `총 ${total}초 — 쇼츠 60초 초과` });
   for (let i = 2; i < shots.length; i++) {
     const [a, b, c] = [shots[i - 2], shots[i - 1], shots[i]];
     if (a.size === b.size && b.size === c.size) {
@@ -398,7 +411,7 @@ export function checkRules(shots: Shot[]): Warning[] {
 
 // ───────── 실존 인물·정당 경고(목록 기반) ─────────
 const REAL_NAMES = [
-  '윤석열', '이재명', '문재인', '박근혜', '이명박', '노무현', '김대중', '한동훈', '김건희', '조국', '이준석', '안철수',
+  '윤석열', '이재명', '문재인', '박근혜', '이명박', '노무현', '김대중', '한동훈', '김건희', '이준석', '안철수',
   '홍준표', '오세훈', '김문수', '트럼프', '바이든', '오바마', '시진핑', '푸틴', '김정은', '기시다', '이시바', '마크롱',
   '머스크', '이재용', '이건희', '정의선', '손흥민', '유재석', '아이유', '국민의힘', '더불어민주당', '민주당',
   '조국혁신당', '개혁신당', '정의당', 'trump', 'biden', 'obama', 'putin', 'xi jinping', 'kim jong', 'elon musk',
@@ -513,7 +526,8 @@ const COVERAGE: { label: string; patch: Partial<Shot>; tech?: string; note?: str
 
 export function buildCoverage(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = [], locs: Location[] = []): Variant[] {
   return COVERAGE.map((c, i) => {
-    const v: Shot = { ...s, ...c.patch, techniques: c.tech ? [c.tech] : (s.techniques ?? []).filter((id) => !techById(id)?.moves) };
+    const flip = c.label === '리버스 앵글' && (s.screenDir === '좌→우' || s.screenDir === '우→좌');
+    const v: Shot = { ...s, ...c.patch, ...(flip ? { screenDir: s.screenDir === '좌→우' ? '우→좌' : '좌→우' } : {}), techniques: c.tech ? [c.tech] : (s.techniques ?? []).filter((id) => !techById(id)?.moves) };
     const head = `Coverage ${i + 1}/${COVERAGE.length} of the same moment — keep subject, wardrobe, setting and lighting identical.${c.note ? ' ' + c.note : ''}`;
     return { label: c.label, prompt: `${head}\n${buildVideoPrompt(v, bible, format, chars, locs)}` };
   });

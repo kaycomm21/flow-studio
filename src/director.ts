@@ -119,7 +119,8 @@ const pick = <T extends string>(v: unknown, list: readonly T[], fallback: T): [T
 /** LLM 답변(텍스트)에서 JSON 배열을 찾아 샷으로 변환. 잘못된 값은 기본값으로 교정하고 issues에 기록 */
 export function parseScenarioResponse(text: string, p: Project): { shots: Shot[]; issues: string[] } {
   const issues: string[] = [];
-  let body = text.replace(/```(?:json)?/gi, '');
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  let body = fence && fence[1].includes('[') ? fence[1] : text;
   const a = body.indexOf('[');
   const z = body.lastIndexOf(']');
   if (a < 0 || z <= a) throw new Error('답변에서 JSON 배열 [ ... ] 을 찾지 못했습니다');

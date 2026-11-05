@@ -272,3 +272,32 @@ describe('파일명', () => {
     expect(safeFileName('', 'csv', d)).toBe('flow_series_C_20261105-0907.csv');
   });
 });
+
+import { nextShotId } from './lib';
+describe('검수 수정', () => {
+  const p = defaultProject('A');
+  it('샷 삭제 후 추가해도 ID 중복 없음 + 중복 경고', () => {
+    const s = defaultShots('A').filter((x) => x.id !== 'S03'); // 7개, S08 존재
+    expect(nextShotId(s)).toBe('S09');
+    const dup = [...s, { ...s[0] }];
+    expect(checkRules(dup).some((w) => w.rule === 'dupId')).toBe(true);
+  });
+  it('쇼츠 60초 초과 경고, 롱폼은 없음', () => {
+    const s = defaultShots('A').map((x) => ({ ...x, seconds: 10 }));
+    expect(checkRules(s, 'shorts').some((w) => w.rule === 'overLength')).toBe(true);
+    expect(checkRules(s, 'long').some((w) => w.rule === 'overLength')).toBe(false);
+  });
+  it('리버스 앵글은 화면 방향을 뒤집는다', () => {
+    const s = { ...p.shots[0], screenDir: '좌→우' as const };
+    const rev = buildCoverage(s, p.bible, 'shorts', p.characters, p.locations)[1];
+    expect(rev.prompt).toContain('right to left');
+  });
+  it('"조국"(일반명사) 오탐 없음', () => {
+    expect(findRealNames('조국을 위한 노래')).toEqual([]);
+  });
+  it('AI 답변 앞 설명에 [대괄호]가 있어도 코드블록 우선 파싱', async () => {
+    const { parseScenarioResponse } = await import('./director');
+    const r = parseScenarioResponse('[참고] 아래 결과\n```json\n[{"id":"S01","size":"CU"}]\n```', p);
+    expect(r.shots[0].size).toBe('CU');
+  });
+});

@@ -61,7 +61,7 @@ npm run dev
 | `src/lib.ts` | 프리셋·비트시트·규칙 경고·프롬프트 조립·캐릭터·멀티앵글·전환·크레딧·내보내기 (순수 함수) |
 | `src/director.ts` | 월드 시트·AI 시나리오 연결·결함 보정·오디오/편집 큐시트·파일명 |
 | `src/techniques.ts` | 영화 연출 기법 라이브러리 39종 + 비트별 추천 |
-| `src/lib.test.ts` | vitest 단위 테스트 33개 |
+| `src/lib.test.ts` | vitest 단위 테스트 38개 |
 | `src/App.tsx` | 5탭 화면 |
 | `dist/` | 빌드 결과물 (커밋됨) |
 | `.github/workflows/deploy.yml` | Pages 자동 배포 |

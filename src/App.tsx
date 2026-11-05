@@ -15,6 +15,7 @@ import {
   TRANSITIONS,
   beatLabel,
   blankShot,
+  nextShotId,
   buildBridge,
   buildCharacterSheet,
   buildCoverage,
@@ -109,7 +110,7 @@ export default function App() {
     }
   }, [p]);
 
-  const warnings = useMemo(() => checkRules(p.shots), [p.shots]);
+  const warnings = useMemo(() => checkRules(p.shots, p.brief.format), [p.shots, p.brief.format]);
   const realNames = useMemo(() => projectRealNames(p), [p]);
   const flagged = useMemo(() => new Set(warnings.flatMap((w) => w.shotIds)), [warnings]);
 
@@ -323,7 +324,10 @@ export default function App() {
               <button onClick={() => fileRef.current?.click()}>📂 JSON 불러오기</button>
               <button onClick={() => download(fname('md'), exportMarkdown(p), 'text/markdown')}>⬇️ Markdown 콘티</button>
               <button onClick={() => download(fname('csv'), buildEditCsv(p), 'text/csv')}>⬇️ 편집 큐시트 CSV</button>
-              <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => onImport(e.target.files?.[0])} />
+              <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => {
+                  onImport(e.target.files?.[0]);
+                  e.target.value = '';
+                }} />
             </div>
           </section>
         )}
@@ -346,7 +350,7 @@ export default function App() {
             </div>
             <div className="row wrap">
               <span className="muted">총 {totalSec}초 / 목표 {p.brief.format === 'shorts' ? '60' : '—'}초 · 피사체/동작/장소/조명은 영어로 쓰면 그대로 프롬프트에 들어갑니다</span>
-              <button onClick={() => setP((x) => ({ ...x, shots: [...x.shots, blankShot(x.shots.length)] }))}>+ 샷 추가</button>
+              <button onClick={() => setP((x) => ({ ...x, shots: [...x.shots, { ...blankShot(x.shots.length), id: nextShotId(x.shots) }] }))}>+ 샷 추가</button>
               <button onClick={() => applyPreset(p.brief.preset)}>↺ 8샷 자동 배치</button>
               <button className="primary" onClick={() => setAiOpen(!aiOpen)}>
                 🤖 AI로 콘티 채우기
