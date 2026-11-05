@@ -155,7 +155,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <h1>🎬 Flow 콘티 스튜디오</h1>
+        <h1><span className="dot" />Flow 콘티 스튜디오 <small>// cinematic prompt studio</small></h1>
         <nav>
           {TABS.map((t) => (
             <button key={t} className={t === tab ? 'on' : ''} onClick={() => setTab(t)}>
@@ -459,7 +459,7 @@ export default function App() {
                   <b>미리보기 — {s.id} 영상 프롬프트</b>
                   <button onClick={() => copy(buildVideoPrompt(s, p.bible, p.brief.format, ch), `${s.id} 복사됨`)}>복사</button>
                 </div>
-                <pre>{buildVideoPrompt(s, p.bible, p.brief.format, ch)}</pre>
+                <Code t={buildVideoPrompt(s, p.bible, p.brief.format, ch)} />
               </div>
             </section>
           );
@@ -481,7 +481,7 @@ export default function App() {
                     <b>👤 {c.id} {c.name} — 캐릭터 시트 (먼저 이미지로 만들어 참조 이미지로 사용)</b>
                     <button onClick={() => copy(t, `${c.id} 캐릭터 시트 복사됨`)}>복사</button>
                   </div>
-                  <pre className="img">{t}</pre>
+                  <Code t={t} kind="img" />
                 </div>
               );
             })}
@@ -498,7 +498,7 @@ export default function App() {
                     <button onClick={() => setOpenCov(openCov === i ? null : i)}>{openCov === i ? '접기' : '멀티앵글'}</button>
                     <button onClick={() => copy(v, `${s.id} 복사됨`)}>복사</button>
                   </div>
-                  <pre>{v}</pre>
+                  <Code t={v} />
                   {openCov === i &&
                     buildCoverage(s, p.bible, p.brief.format, ch).map((cv, k) => (
                       <div key={k}>
@@ -506,7 +506,7 @@ export default function App() {
                           <b>🎞 {s.id}-{String.fromCharCode(65 + k)} {cv.label}</b>
                           <button onClick={() => copy(cv.prompt, `${s.id} ${cv.label} 복사됨`)}>복사</button>
                         </div>
-                        <pre className="cov">{cv.prompt}</pre>
+                        <Code t={cv.prompt} kind="cov" />
                       </div>
                     ))}
                   {img && (
@@ -515,7 +515,7 @@ export default function App() {
                         <b>🖼 키프레임 (Nano Banana)</b>
                         <button onClick={() => copy(img, `${s.id} 키프레임 복사됨`)}>복사</button>
                       </div>
-                      <pre className="img">{img}</pre>
+                      <Code t={img} kind="img" />
                     </>
                   )}
                 </div>
@@ -534,7 +534,7 @@ export default function App() {
                       </b>
                       <button onClick={() => copy(t, `${a.id}→${b.id} 브리지 복사됨`)}>복사</button>
                     </div>
-                    <pre className="cov">{t}</pre>
+                    <Code t={t} kind="cov" />
                   </div>
                 ) : null;
               })}
@@ -632,6 +632,21 @@ export default function App() {
       <footer className="muted">서버·API 키 없음 · 이 브라우저(localStorage)에만 저장됩니다 · 백업은 JSON 내보내기</footer>
       {toast && <div className="toast">{toast}</div>}
     </div>
+  );
+}
+
+// 프롬프트 블록: 줄 머리("Setting:" 등)를 코드 에디터처럼 색 구분
+function Code({ t, kind }: { t: string; kind?: 'img' | 'cov' }) {
+  return (
+    <pre className={kind ?? ''}>
+      {t.split('\n').map((line, i) => {
+        if (/^No text/i.test(line)) return <span key={i} className="c-cm">{line + '\n'}</span>;
+        const m = line.match(/^([A-Z][A-Za-z ]{2,24}:)(.*)$/);
+        if (m) return <span key={i}><span className="c-kw">{m[1]}</span>{m[2] + '\n'}</span>;
+        if (i === 0) return <span key={i} className="c-fn">{line + '\n'}</span>;
+        return <span key={i}>{line + '\n'}</span>;
+      })}
+    </pre>
   );
 }
 
