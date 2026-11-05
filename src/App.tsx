@@ -4,6 +4,8 @@ import {
   BEATS,
   BIBLES,
   CHARACTERS,
+  LOCATIONS,
+  SCREEN_DIRS,
   MODELS,
   MOVES,
   QC_LABELS,
@@ -29,10 +31,22 @@ import {
   projectRealNames,
   qcAverage,
   type Character,
+  type Location,
   type PresetKey,
   type Project,
   type Shot,
 } from './lib';
+import {
+  DEFECTS,
+  buildAudioCue,
+  buildEditCsv,
+  buildLocationSheet,
+  buildLocationTour,
+  buildRegenPrompt,
+  buildScenarioRequest,
+  parseScenarioResponse,
+  safeFileName,
+} from './director';
 import { BEAT_RECO, TECHNIQUES, TECH_CATS, isCompatible, recommend, techById } from './techniques';
 
 const KEY = 'flow-studio-v1';
@@ -54,7 +68,9 @@ function download(name: string, text: string, type: string) {
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
@@ -80,6 +96,10 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [sel, setSel] = useState(0); // 연출 탭에서 선택된 샷
   const [openCov, setOpenCov] = useState<number | null>(null);
+  const [openTour, setOpenTour] = useState<string | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiText, setAiText] = useState('');
+  const [aiIssues, setAiIssues] = useState<string[]>([]);
 
   useEffect(() => {
     try {
@@ -118,10 +138,30 @@ export default function App() {
   };
   const ch = p.characters;
   const charName = (id: string) => ch.find((c) => c.id === id)?.name ?? '';
+  const lc = p.locations;
+  const locName = (id: string) => lc.find((l) => l.id === id)?.name ?? '';
+  const setLoc = (i: number, patch: Partial<Location>) =>
+    setP((x) => ({ ...x, locations: x.locations.map((l, j) => (j === i ? { ...l, ...patch } : l)) }));
+  const toggleDefect = (i: number, id: string) =>
+    setP((x) => ({
+      ...x,
+      shots: x.shots.map((s, j) => (j !== i ? s : { ...s, defects: s.defects.includes(id) ? s.defects.filter((d) => d !== id) : [...s.defects, id] })),
+    }));
+  const applyAi = () => {
+    try {
+      const { shots, issues } = parseScenarioResponse(aiText, p);
+      if (!confirm(`AI 답변에서 ${shots.length}샷을 읽었습니다. 현재 콘티를 덮어쓸까요?${issues.length ? `\n(자동 교정 ${issues.length}건)` : ''}`)) return;
+      setP((x) => ({ ...x, shots }));
+      setAiIssues(issues);
+      say(`✅ AI 콘티 ${shots.length}샷 적용`);
+    } catch (e) {
+      alert('적용 실패: ' + (e as Error).message);
+    }
+  };
 
   const applyPreset = (k: PresetKey) => {
     if (!confirm(`프리셋 ${BIBLES[k].name}로 바꾸고 8샷을 다시 배치할까요?\n(현재 샷 내용은 덮어씁니다)`)) return;
-    setP((x) => ({ ...x, brief: { ...x.brief, preset: k }, bible: { ...BIBLES[k] }, characters: CHARACTERS[k].map((c) => ({ ...c })), shots: defaultShots(k) }));
+    setP((x) => ({ ...x, brief: { ...x.brief, preset: k }, bible: { ...BIBLES[k] }, characters: CHARACTERS[k].map((c) => ({ ...c })), locations: LOCATIONS[k].map((l) => ({ ...l })), shots: defaultShots(k) }));
     say('✅ 프리셋 적용 + 8샷 자동 배치');
   };
 
@@ -135,16 +175,12 @@ export default function App() {
     }
   };
 
-  const fname = (ext: string) =>
-    `${(p.brief.series || 'flow-series').replace(/[\\/:*?"<>|\s]+/g, '_')}_ⓒ_${new Date()
-      .toISOString()
-      .slice(0, 16)
-      .replace(/[-:T]/g, '')}.${ext}`;
+  const fname = (ext: string) => safeFileName(p.brief.series, ext, new Date());
 
   const allPrompts = p.shots
     .map((s) => {
-      const v = `### ${s.id} (${beatLabel(s.beat)}, ${s.seconds}s, ${s.model})\n${buildVideoPrompt(s, p.bible, p.brief.format, ch)}`;
-      return s.keyframe ? `${v}\n\n### ${s.id} 키프레임(Nano Banana)\n${buildImagePrompt(s, p.bible, p.brief.format, ch)}` : v;
+      const v = `### ${s.id} (${beatLabel(s.beat)}, ${s.seconds}s, ${s.model})\n${buildVideoPrompt(s, p.bible, p.brief.format, ch, lc)}`;
+      return s.keyframe ? `${v}\n\n### ${s.id} 키프레임(Nano Banana)\n${buildImagePrompt(s, p.bible, p.brief.format, ch, lc)}` : v;
     })
     .join('\n\n');
 
@@ -261,10 +297,32 @@ export default function App() {
                 </button>
               </div>
             </div>
+            <div className="field">
+              <b className="sub">📍 월드 시트 (장소를 한 번 정의 → 모든 샷에서 같은 공간으로 고정)</b>
+              {lc.map((l, i) => (
+                <div key={i} className="charrow">
+                  <div className="row">
+                    <input className="w5" value={l.id} onChange={(e) => setLoc(i, { id: e.target.value })} title="ID" />
+                    <input value={l.name} placeholder="장소 이름(한국어 라벨)" onChange={(e) => setLoc(i, { name: e.target.value })} />
+                    <button className="x" onClick={() => confirm(`${l.name || l.id} 삭제?`) && setP((x) => ({ ...x, locations: x.locations.filter((_, j) => j !== i) }))}>
+                      ✕
+                    </button>
+                  </div>
+                  <input value={l.place} placeholder="place (어떤 장소, 영어)" onChange={(e) => setLoc(i, { place: e.target.value })} />
+                  <input value={l.details} placeholder="details (재질·랜드마크·구조, 영어)" onChange={(e) => setLoc(i, { details: e.target.value })} />
+                </div>
+              ))}
+              <div>
+                <button onClick={() => setP((x) => ({ ...x, locations: [...x.locations, { id: `L${x.locations.length + 1}`, name: '', place: '', details: '' }] }))}>
+                  + 장소 추가
+                </button>
+              </div>
+            </div>
             <div className="row wrap">
               <button onClick={() => download(fname('json'), JSON.stringify(exportJson(p), null, 2), 'application/json')}>⬇️ JSON 내보내기</button>
               <button onClick={() => fileRef.current?.click()}>📂 JSON 불러오기</button>
               <button onClick={() => download(fname('md'), exportMarkdown(p), 'text/markdown')}>⬇️ Markdown 콘티</button>
+              <button onClick={() => download(fname('csv'), buildEditCsv(p), 'text/csv')}>⬇️ 편집 큐시트 CSV</button>
               <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => onImport(e.target.files?.[0])} />
             </div>
           </section>
@@ -290,7 +348,29 @@ export default function App() {
               <span className="muted">총 {totalSec}초 / 목표 {p.brief.format === 'shorts' ? '60' : '—'}초 · 피사체/동작/장소/조명은 영어로 쓰면 그대로 프롬프트에 들어갑니다</span>
               <button onClick={() => setP((x) => ({ ...x, shots: [...x.shots, blankShot(x.shots.length)] }))}>+ 샷 추가</button>
               <button onClick={() => applyPreset(p.brief.preset)}>↺ 8샷 자동 배치</button>
+              <button className="primary" onClick={() => setAiOpen(!aiOpen)}>
+                🤖 AI로 콘티 채우기
+              </button>
             </div>
+            {aiOpen && (
+              <div className="card">
+                <b className="sub">🤖 AI 시나리오 연결 — 내 Claude·Gemini 구독으로 콘티 초안 받기 (API 키 불필요)</b>
+                <div className="muted">① 요청문 복사 → ② Claude/Gemini에 붙여넣기 → ③ 받은 답변 전체를 아래 칸에 붙여넣고 [적용]</div>
+                <div className="row wrap">
+                  <button onClick={() => copy(buildScenarioRequest(p), 'AI 요청문 복사됨')}>① 요청문 복사</button>
+                  <button className="primary" disabled={!aiText.trim()} onClick={applyAi}>
+                    ③ 적용
+                  </button>
+                </div>
+                <textarea rows={6} value={aiText} placeholder="② AI 답변을 통째로 붙여넣기 (```json 코드블록·설명 문장이 섞여 있어도 됩니다)" onChange={(e) => setAiText(e.target.value)} />
+                {aiIssues.length > 0 && (
+                  <div className="muted">
+                    🔧 자동 교정 {aiIssues.length}건: {aiIssues.slice(0, 8).join(' · ')}
+                    {aiIssues.length > 8 ? ' …' : ''}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="tablewrap">
               <table>
                 <thead>
@@ -369,6 +449,8 @@ export default function App() {
                         >
                           🎥 {s.techniques.map((id) => techById(id)?.ko).filter(Boolean).join(', ') || '기법 선택'}
                           {s.characterId && <small> · 👤{charName(s.characterId) || s.characterId}</small>}
+                          {s.locationId && <small> · 📍{locName(s.locationId) || s.locationId}</small>}
+                          {s.screenDir && <small> · {s.screenDir}</small>}
                         </button>
                       </td>
                       <td>
@@ -433,6 +515,27 @@ export default function App() {
                     ))}
                   </select>
                 </label>
+                <div className="row wrap">
+                  <label className="inline">
+                    📍 장소 고정
+                    <select value={s.locationId} onChange={(e) => setShot(i, { locationId: e.target.value })}>
+                      <option value="">(없음)</option>
+                      {lc.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.id} {l.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="inline" title="연속 샷에서 좌→우가 우→좌로 뒤집히면 180도 규칙 경고">
+                    ↔ 화면 방향
+                    <Sel v={s.screenDir} opts={SCREEN_DIRS} on={(v) => setShot(i, { screenDir: v })} empty="(지정 안 함)" />
+                  </label>
+                </div>
+                <label className="inline">
+                  🔊 효과음
+                  <input value={s.sfx} placeholder="비우면 장소·동작으로 자동 생성 (영어)" onChange={(e) => setShot(i, { sfx: e.target.value })} />
+                </label>
               </div>
               {TECH_CATS.map((cat) => (
                 <div key={cat} className="card">
@@ -457,9 +560,9 @@ export default function App() {
               <div className="card">
                 <div className="cardhead">
                   <b>미리보기 — {s.id} 영상 프롬프트</b>
-                  <button onClick={() => copy(buildVideoPrompt(s, p.bible, p.brief.format, ch), `${s.id} 복사됨`)}>복사</button>
+                  <button onClick={() => copy(buildVideoPrompt(s, p.bible, p.brief.format, ch, lc), `${s.id} 복사됨`)}>복사</button>
                 </div>
-                <Code t={buildVideoPrompt(s, p.bible, p.brief.format, ch)} />
+                <Code t={buildVideoPrompt(s, p.bible, p.brief.format, ch, lc)} />
               </div>
             </section>
           );
@@ -485,9 +588,33 @@ export default function App() {
                 </div>
               );
             })}
+            {lc.map((l) => {
+              const t = buildLocationSheet(l, p.bible);
+              const tour = buildLocationTour(l, p.bible, p.brief.format);
+              return (
+                <div key={l.id} className="card">
+                  <div className="cardhead">
+                    <b>📍 {l.id} {l.name} — 월드 시트 (장소 참조 이미지)</b>
+                    <button onClick={() => setOpenTour(openTour === l.id ? null : l.id)}>{openTour === l.id ? '접기' : '월드 카메라 5종'}</button>
+                    <button onClick={() => copy(t, `${l.id} 월드 시트 복사됨`)}>복사</button>
+                  </div>
+                  <Code t={t} kind="img" />
+                  {openTour === l.id &&
+                    tour.map((v, k) => (
+                      <div key={k}>
+                        <div className="cardhead">
+                          <b>🌐 {l.id}-{k + 1} {v.label}</b>
+                          <button onClick={() => copy(v.prompt, `${l.id} ${v.label} 복사됨`)}>복사</button>
+                        </div>
+                        <Code t={v.prompt} kind="cov" />
+                      </div>
+                    ))}
+                </div>
+              );
+            })}
             {p.shots.map((s, i) => {
-              const v = buildVideoPrompt(s, p.bible, p.brief.format, ch);
-              const img = s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format, ch) : '';
+              const v = buildVideoPrompt(s, p.bible, p.brief.format, ch, lc);
+              const img = s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format, ch, lc) : '';
               return (
                 <div key={i} className={`card ${flagged.has(s.id) ? 'flagcard' : ''}`}>
                   <div className="cardhead">
@@ -500,7 +627,7 @@ export default function App() {
                   </div>
                   <Code t={v} />
                   {openCov === i &&
-                    buildCoverage(s, p.bible, p.brief.format, ch).map((cv, k) => (
+                    buildCoverage(s, p.bible, p.brief.format, ch, lc).map((cv, k) => (
                       <div key={k}>
                         <div className="cardhead">
                           <b>🎞 {s.id}-{String.fromCharCode(65 + k)} {cv.label}</b>
@@ -521,6 +648,14 @@ export default function App() {
                 </div>
               );
             })}
+            <div className="card">
+              <b className="sub">🔊 오디오 큐시트 — 배경음악(Lyria·Suno) + 샷별 효과음</b>
+              <div className="cardhead">
+                <b className="muted">비트별 음악 구조 + 타임코드</b>
+                <button onClick={() => copy(buildAudioCue(p), '오디오 큐시트 복사됨')}>복사</button>
+              </div>
+              <Code t={buildAudioCue(p)} kind="cov" />
+            </div>
             <div className="card">
               <b className="sub">🔀 전환 브리지 — 매치컷·빛변화·암전 사이를 잇는 2초 연결 샷 (시작·끝 프레임 모드용)</b>
               {p.shots.slice(0, -1).map((a, k) => {
@@ -601,6 +736,25 @@ export default function App() {
                       <input className="w5" type="number" min={0} value={s.credits} onChange={(e) => setShot(i, { credits: Number(e.target.value) })} />
                     </label>
                   </div>
+                  <div className="chips">
+                    {DEFECTS.map((d) => (
+                      <button key={d.id} className={s.defects.includes(d.id) ? 'on' : ''} onClick={() => toggleDefect(i, d.id)}>
+                        {d.ko}
+                      </button>
+                    ))}
+                  </div>
+                  {(s.defects.length > 0 || regen) && (() => {
+                    const rp = buildRegenPrompt(buildVideoPrompt(s, p.bible, p.brief.format, ch, lc), s);
+                    return (
+                      <>
+                        <div className="cardhead">
+                          <b className="muted">🔁 재생성 보정 프롬프트 {s.defects.length === 0 && '— 위에서 결함을 골라야 보정 줄이 붙습니다'}</b>
+                          <button onClick={() => copy(rp, `${s.id} 보정 프롬프트 복사됨`)}>복사</button>
+                        </div>
+                        <Code t={rp} kind="cov" />
+                      </>
+                    );
+                  })()}
                   <div className="qc">
                     {QC_LABELS.map((l, q) => (
                       <label key={l}>
