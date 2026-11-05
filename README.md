@@ -3,7 +3,7 @@
 AI 영상 생성(Flow 등)용 **쇼츠/롱폼 콘티 → 샷별 영어 프롬프트 → 생성 기록·크레딧 관리**를 한 화면에서 하는 정적 웹앱입니다.
 서버·API 키 없음. 모든 데이터는 **내 브라우저(localStorage)** 에만 저장됩니다.
 
-- 🌐 Pages 주소(배포 성공 시): https://kaycomm21.github.io/flow-studio/
+- 🌐 Pages 주소: https://kaycomm21.github.io/flow-studio/ — ⚠️ 현재 미배포(저장소 Pages 설정이 꺼져 있음). 아래 "Pages 켜는 법" 1회 설정 후 활성화
 - 📦 배포가 안 될 때: 이 저장소의 `dist/` 폴더가 이미 빌드된 완성본입니다 (아래 "로컬 실행" 참고)
 
 ## ✅ 사용법 5줄
@@ -27,7 +27,10 @@ git clone https://github.com/kaycomm21/flow-studio.git
 cd flow-studio
 ```
 ```bash
-npx vite preview --outDir dist
+npm install
+```
+```bash
+npm run preview
 ```
 → 터미널에 `Local: http://localhost:4173/` 이 뜨면 그 주소를 브라우저로 엽니다.
 
