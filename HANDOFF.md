@@ -1,95 +1,106 @@
-# 📦 Flow 콘티 스튜디오: 최종 인수인계 문서
+# 📦 Flow 콘티 스튜디오 v2: 인수인계 문서
 
-> 작성: Claude Code (ⓒ) · 2026-11-05 · **이 문서가 유일한 최신본입니다** (이전 판은 폐기)
-> 사용자: 김영근 PD. 1인 전용 도구이며 사용자는 코딩 배경이 없습니다. **UI·보고는 한국어**, 결론 → 근거 → Action Step 순서로, 표 위주로 보고합니다.
+> 작성: Claude Code (ⓒ) · 2026-11-16 · **이 문서가 유일한 최신본** (v1 문서는 폐기)
+> 사용자: 김영근 PD. 1인 전용, 코딩 배경 없음. **UI·보고는 한국어**, 결론 → 근거 → Action Step, 표 위주.
 
 ## 1. 요약
 | 항목 | 값 |
 |---|---|
-| 목적 | AI 영상(Flow 등)용 콘티 → 샷별 영어 프롬프트 → 생성 기록·크레딧 관리 |
-| 저장소 | https://github.com/kaycomm21/flow-studio (작업 브랜치 `claude/flow-studio-mvp-q0e8ls`) |
-| 배포 | https://kaycomm21.github.io/flow-studio/ (GitHub Actions → Pages, `.github/workflows/deploy.yml`) |
-| 스택 | Vite 6.4.5 · React 18.3.1 · TypeScript 5.6.3 · vitest 3.2.7 (버전 고정) |
-| 저장 | 브라우저 localStorage 키 `flow-studio-v1`. 서버·API 키 없음. 백업은 JSON 내보내기 |
-| 품질 | `npm test` 38/38 통과, `npm run build` 성공, 375px에서 가로 넘침 없음 확인 |
+| 목적 | AI 영상용 기획 → 콘티 → 제작(프롬프트·판정·크레딧) → 마무리(대본·자막·편집표) |
+| 저장소 / 작업 브랜치 | https://github.com/kaycomm21/flow-studio / `claude/flow-studio-mvp-q0e8ls` |
+| 배포 | https://kaycomm21.github.io/flow-studio/ (Actions → Pages) |
+| 스택 | Vite 6.4.5 · React 18.3.1 · TypeScript 5.6.3 · vitest 3.2.7 |
+| 저장 | localStorage `flow-studio-v2` (보관함+지갑). v1 키 `flow-studio-v1`은 첫 실행 때 자동 이전 |
+| 품질 | `npm test` 53/53, `npm run build` 성공, 375px·1280px에서 전체 흐름 Playwright 확인 |
 
-## 2. ⚠️ 미해결 이슈 (사용자가 GitHub 설정 화면에서 처리)
-| # | 이슈 | 해결 방법 |
+## 2. ⚠️ 미해결 (사용자가 GitHub 설정에서 처리)
+| # | 이슈 | 해결 |
 |---|---|---|
-| 1 | `main`에 푸시하면 Pages 배포 실패 (run #7, #9). 배포 허용 브랜치가 `claude/...`뿐이기 때문 | Settings → Environments → `github-pages` → Deployment branches에 `main` 추가 |
-| 2 | 기본 브랜치가 `claude/...`일 가능성 | Settings → General → Default branch → `main` |
-| → | 처리 전까지는 **작업 브랜치에 푸시해야 사이트가 갱신**됩니다 | 처리 후 Actions → Run workflow(main)으로 확인 |
+| 1 | `main` 푸시 시 Pages 배포 실패 — 배포 허용 브랜치가 `claude/...`뿐 | Settings → Environments → `github-pages` → Deployment branches에 `main` 추가 |
+| 2 | 기본 브랜치가 `claude/...`일 수 있음 | Settings → General → Default branch → `main` |
+| 3 | v2 작업은 작업 브랜치에만 있음 (`main` 미반영) | 1번 처리 후 PR 머지 |
 
-## 3. 기능 목록 (탭별)
-| 탭 | 기능 |
+처리 전까지는 **작업 브랜치에 푸시해야 사이트가 갱신**됩니다.
+
+## 3. v1 → v2 무엇이 바뀌었나
+| 구분 | v1 | v2 |
+|---|---|---|
+| 화면 | 5탭, 13열 가로 스크롤 표 | 4단계(기획·콘티·제작·마무리) + **▶ 다음 할 일** 안내, 샷 카드 |
+| 프롬프트 복사와 기록 | 서로 다른 탭 | 제작 화면 한 장: 복사 → 생성 기록 → 판정 |
+| 크레딧 | 편마다 수동 입력 | **지갑**(모든 편 합산), 모델별 비용 × 생성 횟수 자동, 재생성률 반영 예상 |
+| 편 관리 | 1편만 | **보관함**: 여러 편, 다음 편(스타일 유지), 복제, 전체 백업 |
+| 나레이션 | 없음 | 샷별 한국어 나레이션, 길이 경고, 대본·SRT 자막 |
+| 경고 | 표시만 | **자동 수정**, 수동 항목은 해당 샷으로 안내 |
+| 소리 | 없음 | 영상 프롬프트에 `Audio:` 줄 (끄기 가능) |
+| 한글 입력 | 방치 | 영어 변환 도우미 (요청문 → 답변 적용) |
+| 안전장치 | confirm 창 | 큰 변경마다 **되돌리기**, 손상 데이터 보정·원본 보관 |
+
+### 고친 오류
+| 문제 | 수정 |
 |---|---|
-| 브리프 | 시리즈·채널·주제·사실 3줄, 프리셋 A 신비 건축 / B 동물 풍자 / C B롤 (STYLE BIBLE·8샷·캐릭터·장소 자동 세팅), 포맷 쇼츠 9:16 / 롱폼 16:9, 👤 캐릭터 시트 편집, 📍 월드(장소) 편집, JSON 내보내기·불러오기, Markdown 콘티, 편집 큐시트 CSV |
-| 콘티 | 6비트 시트(0-3 / 3-12 / 12-30 / 30-45 / 45-55 / 55-60초), 샷 표 편집, 규칙 경고 배지, 🤖 AI로 콘티 채우기 (요청문 복사 → 사용자의 Claude/Gemini → 답변 붙여넣기 → 자동 교정 후 적용) |
-| 연출 | 기법 39종(구도·카메라·렌즈·조명·속도), 비트별 추천 일괄 적용, 캐릭터·장소 고정, ↔ 화면 방향, 🔊 효과음 메모, 실시간 프롬프트 미리보기 |
-| 프롬프트 | 샷별 영어 프롬프트 + 키프레임(Nano Banana) 이미지 프롬프트, 복사·전체 복사, 캐릭터 시트, 월드 시트 + 월드 카메라 5종, 🎞 멀티앵글 6종, 🔊 오디오 큐시트, 🔀 전환 브리지 |
-| 기록·크레딧 | 샷 상태, 사용 크레딧 → 잔량 바(시작 1,050)·1편 평균 단가·남은 가능 편수, QC 5항목(평균 3.5 미만이면 재생성), 결함 태그 10종 → `Fix from previous take` 보정 프롬프트 |
+| 저장 데이터가 깨지면 기본값으로 덮어써 원본 소실 | 원본을 `flow-studio-broken-<시각>` 키로 보관 후 새로 시작, 화면에 안내 |
+| 가져온 JSON의 잘못된 값(null 배열 등)으로 화면이 죽음 | `sanitizeShot`/`sanitizeProject`로 전 필드 보정 |
+| 캐릭터 ID를 고치거나 삭제하면 샷 연결이 끊긴 채 남음 | ID 수정 불가(자동 부여), 삭제 시 연결 해제 |
+| 타임코드 `00:60.0` 표기 | 반올림 후 분 올림 |
+| 영문 실존 인물 오탐(musket → musk) | 단어 경계 검사 |
+| 키프레임 프롬프트 문법 오류("before it push") | 문장 구조 변경 |
+| 진행 중인 편이 1편 평균 단가를 낮춤 | 끝난 편 기준으로 평균 계산 |
+| 알림이 연속으로 뜨면 일찍 사라짐 | 타이머 정리 |
+| JSON 불러오기가 현재 편을 덮어씀 | 보관함에 새 편으로 추가 |
 
-## 4. 파일 구조 · 의존 방향
+## 4. 파일 구조
 | 파일 | 역할 |
 |---|---|
-| `src/lib.ts` | 핵심 순수 로직: 타입, 프리셋, `checkRules`, `buildVideoPrompt`/`buildImagePrompt`, `buildCoverage`, `buildBridge`, `buildCharacterSheet`, 크레딧/QC, `exportJson`/`exportMarkdown`/`parseProject`, `nextShotId` |
-| `src/techniques.ts` | 연출 기법 39종, `BEAT_RECO`, `recommend()`, 카메라무브 호환 `moves` |
-| `src/director.ts` | 월드 시트·투어, `DEFECTS`/`buildRegenPrompt`, `buildScenarioRequest`/`parseScenarioResponse`, `buildAudioCue`, `buildEditCsv`, `safeFileName` |
-| `src/App.tsx` | 5탭 UI (단일 컴포넌트, 약 820줄), `Code`(줄 머리 색 구분), `Sel` |
-| `src/styles.css` | Monokai 다크 (`:root` 변수: bg `#272822`, text `#F8F8F2`, accent `#F92672`) |
-| `src/lib.test.ts` | vitest 38개 |
-| `dist/` | **빌드 결과물도 커밋 대상** (Pages가 막혔을 때 로컬 실행용) |
+| `src/lib.ts` | 타입, 프리셋, `checkRules`, 프롬프트 조립(`shotPrompt`/`shotImagePrompt`), 멀티앵글·브리지·캐릭터 시트, `sanitizeProject`, 내보내기 |
+| `src/techniques.ts` | 연출 기법 39종, 비트별 추천 |
+| `src/director.ts` | 월드 시트·투어, 결함 보정, AI 시나리오 요청·파서, 오디오 큐시트, 편집 CSV, `safeFileName` |
+| `src/assist.ts` | **보관함·지갑**(`loadStore`, `walletSummary`), `autoFix`, `nextAction`, 모델 배분, 번역 도우미, 대본·SRT |
+| `src/App.tsx` | 셸: 헤더, 단계 탭, 다음 할 일, 저장, 되돌리기 알림 |
+| `src/StepPlan.tsx` / `StepBoard.tsx` / `StepShoot.tsx` / `StepWrap.tsx` / `Library.tsx` | 단계별 화면 |
+| `src/ui.tsx` | 공용: `Ctx`(화면 공유 조작), `Code`, `PromptBox`, `Fold`, `Field`, `Sel` |
+| `src/lib.test.ts` | vitest 53개 |
+| `dist/` | 빌드 결과물 (커밋 대상) |
 
-의존 방향: `techniques.ts ← lib.ts ← director.ts ← App.tsx`. 역방향 import는 금지합니다. `techniques.ts`는 lib에서 타입만 가져옵니다.
+의존: `techniques ← lib ← director ← assist ← 화면`. 역방향 import 금지.
 
-## 5. 데이터 모델 핵심
+## 5. 데이터 모델
 ```ts
-Project { brief, bible, characters[{id,name,look,wardrobe,signature}], locations[{id,name,place,details}], shots: Shot[], credit{start,pastUsed,pastEpisodes} }
-Shot { id, beat, purposeType, purpose, size, angle, move, speed, endState, subject, action, setting, lighting,
-       transition, seconds, model, keyframe, techniques[], characterId, locationId, screenDir, sfx,
-       status, credits, qc[5], defects[] }
+Store   { version:2, activeId, projects: Project[], wallet:{ start, otherUsed, costs:{Lite,Fast,Quality,Omni} } }
+Project { id, updatedAt, brief{series, episode, channel, preset, format, topic, facts[3], audio}, bible, characters[], locations[], shots[] }
+Shot    { id, beat, purposeType, purpose, size, angle, move, speed, endState, subject, action, setting, lighting,
+          transition, seconds, model, keyframe, techniques[], characterId, locationId, screenDir, sfx,
+          narration, takes, status, credits, qc[5], defects[] }
 ```
-**필드를 추가할 때 체크리스트:**
-1. 타입 정의
-2. `defaultShots`·`blankShot` 기본값. `parseProject`가 `blankShot`과 합쳐 구버전 데이터를 보정합니다
-3. 배열 필드는 `parseProject`에 `Array.isArray` 처리
-4. `exportJson`·`exportMarkdown`
-5. 사람이 텍스트를 입력하는 필드는 `projectRealNames`에 추가
-6. 테스트 추가
+**필드 추가 시:** ① 타입 ② `defaultShots`·`blankShot` ③ **`sanitizeShot`/`sanitizeProject`** (여기 빠지면 저장 후 사라짐) ④ `exportJson`·`exportMarkdown` ⑤ `projectRealNames` ⑥ AI 요청문·파서(`director.ts`) ⑦ 테스트
 
-## 6. 프롬프트 조립 순서
-`camera(속도·무브·샷크기·앵글·끝상태)` → `subject + 동작 1개 (+화면 방향)` → `Character lock:` → `Location lock:` → `Setting/lighting` → `Lens and render` (CU·INSERT는 lensClose) → `Cinematography:` → `STYLE BIBLE:` → `No text, no logos, no real people, no watermark.` → (재생성 시) `Fix from previous take:`
+상태 흐름: `대기 → (생성 1회 기록) → 생성 → 채택 | 재생성 | 폐기`. 생성 1회마다 `takes+1`, `credits += wallet.costs[model]` (credits는 직접 수정 가능).
 
-빈 줄은 자동으로 빠집니다. `Code` 컴포넌트는 `^[A-Z][A-Za-z ]{2,24}:` 형식의 줄 머리를 핑크로 칠합니다.
+## 6. 프롬프트 줄 순서
+camera → subject+동작(+화면 방향) → `Character lock:` → `Location lock:` → `Setting` → `Lens and render` → `Cinematography:` → `Audio:` → `STYLE BIBLE:` → `No text, no logos, no real people, no watermark.` → (재생성) `Fix from previous take:`
 
-## 7. 규칙 경고 (`checkRules(shots, format)`)
-| rule | 조건 |
-|---|---|
-| sameSize | 같은 샷크기 3연속 |
-| noMove | 카메라무브 미지정 |
-| fewFixed | 연속 3샷 중 고정 0개 |
-| multiAction | action에 `그리고`/`and`/`&` |
-| noInsert | INSERT 0개 |
-| techConflict | 기법과 무브 불일치 (예: 고정 + 돌리 줌) |
-| axisFlip | 연속 샷 좌우 반전 (앞 샷 전환이 암전이면 허용) |
-| dupId | 샷ID 중복 *(이번 검수에서 추가)* |
-| overLength | 쇼츠 총 60초 초과 *(이번 검수에서 추가)* |
-
-불변 조건: **프리셋 A·B·C 기본 8샷은 경고 0개**여야 합니다 (테스트가 강제).
-
-## 8. 이번 최종 검수에서 고친 것
-| # | 문제 | 수정 |
+## 7. 규칙 경고와 자동 수정
+| rule | 조건 | 자동 수정 |
 |---|---|---|
-| 1 | 샷 삭제 후 [+ 샷 추가]를 누르면 ID가 중복됨 (예: S08이 2개) → 경고·복사 대상 혼동 | `nextShotId()`로 겹치지 않는 ID 생성 + `dupId` 경고 |
-| 2 | 쇼츠 길이 초과를 알려주지 않음 | `overLength` 경고 |
-| 3 | 멀티앵글 "리버스 앵글"이 화면 방향을 그대로 둠 (180도 반대편인데 좌→우 유지) | 좌↔우 자동 반전 |
-| 4 | 실존 인물 검사에서 "조국"(祖國, 일반명사) 오탐 | 목록에서 제외 (정당명 "조국혁신당"은 유지) |
-| 5 | AI 답변 앞 설명에 `[참고]` 같은 대괄호가 있으면 JSON 파싱 실패 | ```json 코드블록을 우선 파싱 |
-| 6 | 같은 JSON 파일을 두 번 연속 불러오면 반응 없음 | 파일 선택 후 입력값 초기화 |
+| sameSize | 같은 샷크기 3연속 | 가운데 샷 크기 변경 |
+| noMove | 무브 미지정 | 고정 |
+| fewFixed | 3샷 중 고정 0개 | 가운데 샷을 고정 |
+| noInsert | INSERT 0개 | CU 하나를 INSERT로 (CU 없으면 수동) |
+| techConflict | 기법과 무브 불일치 | 기법 제거 |
+| dupId | ID 중복 | 새 ID |
+| multiAction | 동작 2개 | 수동 (샷 편집에 "첫 동작만 남기기" 버튼) |
+| axisFlip / overLength / voLong | 좌우 반전 / 60초 초과 / 나레이션이 샷보다 김 | 수동 |
 
-이전 세션에서 고친 것: 다운로드 파일명에 한글이나 `ⓒ`가 들어가면 Chrome이 `download`로 바꿔 저장하는 문제 → `safeFileName()`이 `flow_<영문>_C_<YYYYMMDD-HHMM>.ext` 형식으로 생성합니다 (**식별자는 `ⓒ` 대신 `C`**).
+불변: 프리셋 A·B·C 기본 8샷은 경고 0개 (테스트 강제). 나레이션 길이는 공백 제외 글자 수 ÷ 6 초의 **어림값**입니다.
 
-## 9. 개발 명령어 (복붙용)
+## 8. 검증되지 않은 가정 (다음 세션에서 확인할 것)
+| 항목 | 상태 |
+|---|---|
+| 모델별 크레딧 비용 기본값 (Lite 10 / Fast 20 / Quality 100 / Omni 50) | **추정치**. 실제 Flow 차감값 미확인. 사용자가 지갑에서 수정 |
+| `Audio:` 줄·연출 기법이 실제 결과물 품질에 주는 효과 | 미검증. 실제 생성 QC 데이터 필요 |
+| 나레이션 초당 6자 | 어림값. 사용자의 TTS 속도에 맞게 `VO_CHARS_PER_SEC` 조정 |
+| 한글·`ⓒ` 파일명이 `download`로 저장되는 문제 | 클라우드 컨테이너 Chrome에서만 재현 확인. 그래서 파일명은 영문(`flow_<영문>_C_<일시>`) |
+
+## 9. 개발 명령어
 ```bash
 npm install
 ```
@@ -102,43 +113,26 @@ npm test
 ```bash
 npm run build
 ```
-- `npm run dev` → http://localhost:5173 접속
-- `npm test` → `Tests 38 passed`가 나와야 정상
-- `npm run build` → 결과물 `dist/`도 같이 커밋
-- 로컬에서 빌드본만 볼 때: `npm run preview` → http://localhost:4173
+`dist/`도 함께 커밋합니다. 화면 검증은 Playwright로 375px에서 `scrollWidth === 375` 확인.
 
-클라우드 세션에서는 Playwright(Chromium 설치됨)로 375px 스크린샷을 찍고 `scrollWidth === 375`를 확인합니다.
+## 10. 설계 원칙 (사용자 합의)
+1. 외부 API·키 입력란 금지. AI는 "요청문 복사 → 사용자 구독 → 답변 붙여넣기".
+2. 실존 인물·정당·브랜드 금지.
+3. 타사 서비스는 개념만 참고, 이름·UI·문구는 독자.
+4. 단순함 우선: 기본 화면에는 꼭 필요한 것만, 나머지는 접기(`Fold`/`details`).
+5. 파괴적 변경은 `c.commit()`으로 (되돌리기 제공).
 
-## 10. 설계 원칙 (사용자와 합의)
-1. 외부 API 호출·키 입력란 금지. AI가 필요하면 "요청문 복사 → 사용자 구독 → 답변 붙여넣기" 패턴(`director.ts`)을 재사용합니다.
-2. 실존 인물·정당·브랜드 금지. `findRealNames`는 목록 기반이라 한계가 있습니다.
-3. 타사 서비스는 통째로 베끼지 않고 기능 개념만 참고하며, 이름·UI·문구는 독자적으로 만듭니다.
-4. 기능 추가보다 작동 + 배포가 우선입니다. 숫자·기한·담당이 없는 제안은 미완성입니다.
-5. 피사체·동작·장소·조명 입력은 영어가 전제입니다 (번역 API 없음).
+## 11. 백로그
+| 우선 | 작업 | 비고 |
+|---|---|---|
+| P0 | 2장 처리 → `main` 머지·배포 확인 | 사용자 설정 필요 |
+| P1 | 실제 1편 제작 후 모델 비용·기법 효과 보정 | 사용자 데이터 필요 |
+| P1 | vgen.py 연결 (JSON `shots[].prompt/imagePrompt/seconds/model/narration`) | 스키마 `exportJson` v2 |
+| P2 | 롱폼 전용 비트시트·샷 수 | 현재 60초 6비트 공용 |
+| P2 | 사용자 정의 금지어, 프리셋 직접 저장(내 프리셋) | |
+| P3 | 기기 간 동기화 | "서버 없음" 원칙과 충돌 → 사용자 확인 |
 
-## 11. 백로그 (우선순위순)
-| 우선 | 작업 | 난이도 | 비고 |
-|---|---|---|---|
-| P0 | 2장 이슈 처리 확인 → `main` 배포 성공 확인 | 하 | 사용자 작업 |
-| P1 | vgen.py 연결: 로컬 스크립트가 JSON의 `shots[].prompt / imagePrompt / seconds / model`을 읽어 자동 생성 | 중 | vgen.py는 사용자 로컬(Antigravity)에 있음. 스키마는 `exportJson` 기준 |
-| P1 | 연출 기법 효과 검증: QC 점수 비교 → 효과 없는 기법 제거, 기본값 조정 | 중 | 사용자 데이터 필요 |
-| P2 | 롱폼 전용 비트시트 (현재 60초 6비트를 공용) | 중 | `BEATS`를 포맷별로 분리 |
-| P2 | 여러 에피소드 관리 + 크레딧 누적 자동화 | 중 | 현재 1프로젝트 = localStorage 1개 |
-| P2 | 사용자 정의 금지어 목록 | 하 | `REAL_NAMES` 확장 |
-| P3 | `App.tsx` 탭별 컴포넌트 분리 | 중 | 동작은 그대로, 구조만 정리 |
-| P3 | 밝은 테마 토글 | 하 | 현재 다크 고정 |
-| P3 | Firebase(`copper-guide-480206-b0`, 서울 리전) 동기화 | 상 | "서버 없음" 원칙과 충돌하므로 사용자 확인 필수 |
-
-## 12. 이력
-| 단계 | 내용 |
-|---|---|
-| MVP | 4탭, 규칙 경고 5종, 크레딧/QC, JSON/MD, Pages 배포 |
-| 연출 | 기법 39종, 캐릭터 시트, 멀티앵글, 전환 브리지 |
-| PR #1 | Monokai 다크 테마 |
-| PR #2 | 월드 시트, AI 시나리오 연결, 180도 규칙, 결함 보정, 오디오·편집 큐시트, 파일명 수정 |
-| 최종 검수 | 8장의 6건 수정, 테스트 38개 |
-
-## 13. 다음 세션 시작 프롬프트 (복붙)
+## 12. 다음 세션 시작 프롬프트
 ```
 kaycomm21/flow-studio 저장소의 HANDOFF.md를 먼저 읽고 이어서 작업해줘.
 2장 미해결 이슈부터 확인하고, 11장 백로그 중 [작업명]을 진행해줘.

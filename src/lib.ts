@@ -20,6 +20,8 @@ export interface Brief {
   format: FormatKey;
   topic: string;
   facts: [string, string, string];
+  episode: string; // 편 제목
+  audio: boolean; // 영상 프롬프트에 Audio 줄 포함 (Veo는 소리도 생성)
 }
 
 export interface Bible {
@@ -53,17 +55,13 @@ export interface Shot {
   locationId: string; // '' = 없음
   screenDir: ScreenDir; // 화면 진행 방향 (180도 규칙)
   sfx: string; // 효과음 메모 (비우면 자동)
+  narration: string; // 한국어 나레이션(대본)
+  takes: number; // 영상 생성 횟수
   defects: string[]; // 생성 결과 결함 태그
   // 생성 기록
   status: Status;
   credits: number;
   qc: [number, number, number, number, number];
-}
-
-export interface CreditState {
-  start: number;
-  pastUsed: number;
-  pastEpisodes: number;
 }
 
 export interface Character {
@@ -72,6 +70,7 @@ export interface Character {
   look: string;
   wardrobe: string;
   signature: string;
+  ready?: boolean; // 참조 이미지 생성 완료
 }
 
 export interface Location {
@@ -79,15 +78,17 @@ export interface Location {
   name: string; // 한국어 라벨
   place: string;
   details: string;
+  ready?: boolean;
 }
 
 export interface Project {
+  id: string;
+  updatedAt: number;
   brief: Brief;
   bible: Bible;
   characters: Character[];
   locations: Location[];
   shots: Shot[];
-  credit: CreditState;
 }
 
 // ───────── 선택지 ─────────
@@ -274,6 +275,8 @@ export function defaultShots(preset: PresetKey): Shot[] {
     locationId: LOC_MAP[preset][i],
     screenDir: '',
     sfx: '',
+    narration: '',
+    takes: 0,
     defects: [],
     status: '대기',
     credits: 0,
@@ -313,6 +316,8 @@ export function blankShot(index: number): Shot {
     locationId: '',
     screenDir: '',
     sfx: '',
+    narration: '',
+    takes: 0,
     defects: [],
     status: '대기',
     credits: 0,
@@ -320,8 +325,12 @@ export function blankShot(index: number): Shot {
   };
 }
 
+export const newId = () => `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
 export function defaultProject(preset: PresetKey = 'A'): Project {
   return {
+    id: newId(),
+    updatedAt: Date.now(),
     brief: {
       series: '',
       channel: '',
@@ -329,23 +338,34 @@ export function defaultProject(preset: PresetKey = 'A'): Project {
       format: 'shorts',
       topic: '',
       facts: ['', '', ''],
+      episode: '',
+      audio: true,
     },
     bible: { ...BIBLES[preset] },
     characters: CHARACTERS[preset].map((c) => ({ ...c })),
     locations: LOCATIONS[preset].map((l) => ({ ...l })),
     shots: defaultShots(preset),
-    credit: { start: 1050, pastUsed: 0, pastEpisodes: 0 },
   };
 }
 
 // ───────── 규칙 경고 ─────────
 export interface Warning {
-  rule: 'sameSize' | 'noMove' | 'fewFixed' | 'multiAction' | 'noInsert' | 'techConflict' | 'axisFlip' | 'dupId' | 'overLength';
+  rule: 'sameSize' | 'noMove' | 'fewFixed' | 'multiAction' | 'noInsert' | 'techConflict' | 'axisFlip' | 'dupId' | 'overLength' | 'voLong';
   shotIds: string[];
   message: string;
 }
 
+/** 한국어 나레이션 읽는 시간 추정: 공백 제외 글자 수 ÷ 6 (쇼츠용 빠른 낭독 기준의 어림값) */
+export const VO_CHARS_PER_SEC = 6;
+export function narrationSeconds(text: string | undefined): number {
+  const n = (text ?? '').replace(/[\s.,!?…~"'“”‘’()\-]/g, '').length;
+  return n / VO_CHARS_PER_SEC;
+}
+
 const MULTI_ACTION = /그리고|\band\b|&/i;
+
+/** 동작이 2개일 때 첫 동작만 남김 */
+export const firstAction = (action: string) => action.split(/\s*,?\s*(?:\band\b|&|그리고)\s*/i)[0].trim();
 
 export function hasMultipleActions(action: string): boolean {
   return MULTI_ACTION.test(action);
@@ -403,6 +423,12 @@ export function checkRules(shots: Shot[], format: FormatKey = 'shorts'): Warning
       });
     }
   }
+  for (const s of shots) {
+    const est = narrationSeconds(s.narration);
+    if (est > (Number(s.seconds) || 0) + 0.5) {
+      w.push({ rule: 'voLong', shotIds: [s.id], message: `${s.id}: 나레이션 약 ${est.toFixed(1)}초 분량 — 샷 길이 ${s.seconds}초보다 김 (줄이거나 초를 늘리세요)` });
+    }
+  }
   if (shots.length > 0 && !shots.some((s) => s.size === 'INSERT')) {
     w.push({ rule: 'noInsert', shotIds: [], message: '씬에 INSERT 샷이 0개 — 최소 1개 넣으세요' });
   }
@@ -420,14 +446,16 @@ const REAL_NAMES = [
 
 export function findRealNames(text: string): string[] {
   const t = text.toLowerCase();
-  return REAL_NAMES.filter((n) => t.includes(n.toLowerCase()));
+  // 영문 이름은 단어 경계로 검사 (musket·musky 같은 오탐 방지)
+  return REAL_NAMES.filter((n) => (/^[a-z ]+$/.test(n) ? new RegExp(`\\b${n}\\b`).test(t) : t.includes(n)));
 }
 
 export function projectRealNames(p: Project): string[] {
   const parts = [p.brief.series, p.brief.channel, p.brief.topic, ...p.brief.facts];
   for (const c of p.characters ?? []) parts.push(c.name, c.look, c.wardrobe, c.signature);
   for (const l of p.locations ?? []) parts.push(l.name, l.place, l.details);
-  for (const s of p.shots) parts.push(s.sfx ?? '');
+  for (const s of p.shots) parts.push(s.sfx ?? '', s.narration ?? '');
+  parts.push(p.brief.episode ?? '');
   for (const s of p.shots) parts.push(s.subject, s.action, s.setting, s.lighting, s.endState, s.purpose);
   return [...new Set(findRealNames(parts.join(' \n ')))];
 }
@@ -475,7 +503,12 @@ const DIR_EN: Record<ScreenDir, string> = {
 };
 export const dirClause = (s: Shot) => (s.screenDir ? DIR_EN[s.screenDir] : '');
 
-export function buildVideoPrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = [], locs: Location[] = []): string {
+export function audioLine(s: Shot): string {
+  const sfx = clean(s.sfx ?? '') || `natural ambience of ${clean(s.setting) || 'the scene'}, subtle foley matching the action`;
+  return `Audio: ${sfx}; no dialogue, no voice-over, no music.`;
+}
+
+export function buildVideoPrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = [], locs: Location[] = [], audio = false): string {
   const lens = isClose(s.size) ? bible.lensClose : bible.lensWide;
   const dir = dirClause(s);
   const lines = [
@@ -486,18 +519,23 @@ export function buildVideoPrompt(s: Shot, bible: Bible, format: FormatKey, chars
     `Setting: ${clean(s.setting) || 'as established'}; lighting and time: ${clean(s.lighting) || 'natural light'}.`,
     `Lens and render: ${[clean(lens), clean(bible.render), aspectOf(format)].filter(Boolean).join(', ')}.`,
     techniqueLine(s),
+    audio ? audioLine(s) : '',
     `STYLE BIBLE: ${clean(bible.block)}.`,
     `${cap(NEGATIVE)}.`,
   ];
   return lines.filter(Boolean).join('\n');
 }
 
+/** 프로젝트 설정(오디오 줄 등)을 반영한 최종 프롬프트 */
+export const shotPrompt = (p: Project, s: Shot) => buildVideoPrompt(s, p.bible, p.brief.format, p.characters, p.locations, p.brief.audio !== false);
+export const shotImagePrompt = (p: Project, s: Shot) => buildImagePrompt(s, p.bible, p.brief.format, p.characters, p.locations);
+
 export function buildImagePrompt(s: Shot, bible: Bible, format: FormatKey, chars: Character[] = [], locs: Location[] = []): string {
   const lens = isClose(s.size) ? bible.lensClose : bible.lensWide;
   const still = (s.techniques ?? []).map((id) => techById(id)).filter((t) => t && t.cat !== '카메라' && t.cat !== '속도·질감');
   const lines = [
     `Cinematic still keyframe (first frame), ${SIZE_EN[s.size]}, ${ANGLE_EN[s.angle]}.`,
-    `${cap(clean(s.subject) || 'The subject')}, at the moment just before it ${clean(s.action) || 'moves'}.`,
+    `${cap(clean(s.subject) || 'The subject')}, frozen at the very first moment of this action: ${clean(s.action) || 'holding still'}.`,
     characterLine(s, chars),
     locationLine(s, locs),
     still.length ? `Cinematography: ${still.map((t) => t!.en).join('; ')}.` : '',
@@ -578,64 +616,110 @@ export const needsRegen = (qc: number[]) => {
   return avg !== null && avg < 3.5;
 };
 
-export interface CreditSummary {
-  currentUsed: number;
-  totalUsed: number;
-  remaining: number;
-  episodes: number;
-  avgPerEpisode: number;
-  possibleEpisodes: number | null;
-}
-
-export function creditSummary(credit: CreditState, shots: Shot[]): CreditSummary {
-  const currentUsed = shots.reduce((a, s) => a + (Number(s.credits) || 0), 0);
-  const totalUsed = (Number(credit.pastUsed) || 0) + currentUsed;
-  const remaining = (Number(credit.start) || 0) - totalUsed;
-  const episodes = (Number(credit.pastEpisodes) || 0) + (currentUsed > 0 ? 1 : 0);
-  const avgPerEpisode = episodes > 0 ? totalUsed / episodes : 0;
-  const possibleEpisodes = avgPerEpisode > 0 ? Math.max(0, Math.floor(remaining / avgPerEpisode)) : null;
-  return { currentUsed, totalUsed, remaining, episodes, avgPerEpisode, possibleEpisodes };
-}
-
 // ───────── 내보내기 ─────────
 export function exportJson(p: Project) {
   return {
     app: 'flow-studio',
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     brief: p.brief,
     bible: p.bible,
     characters: p.characters.map((c) => ({ ...c, sheetPrompt: buildCharacterSheet(c, p.bible) })),
     locations: p.locations,
-    credit: p.credit,
     shots: p.shots.map((s) => ({
       ...s,
       beatLabel: beatLabel(s.beat),
-      prompt: buildVideoPrompt(s, p.bible, p.brief.format, p.characters, p.locations),
-      imagePrompt: s.keyframe ? buildImagePrompt(s, p.bible, p.brief.format, p.characters, p.locations) : null,
+      prompt: shotPrompt(p, s),
+      imagePrompt: s.keyframe ? shotImagePrompt(p, s) : null,
     })),
   };
 }
 
-export function parseProject(text: string): Project {
-  const d = JSON.parse(text);
-  if (!d || typeof d !== 'object' || !d.brief || !Array.isArray(d.shots)) {
-    throw new Error('형식이 맞지 않는 파일입니다 (brief/shots 없음)');
-  }
-  const base = defaultProject(d.brief.preset ?? 'A');
+const PRESET_KEYS: PresetKey[] = ['A', 'B', 'C'];
+const oneOf = <T,>(v: unknown, list: readonly T[], fb: T): T => ((list as readonly unknown[]).includes(v) ? (v as T) : fb);
+const str = (v: unknown, fb = '') => (typeof v === 'string' ? v : fb);
+const num = (v: unknown, fb = 0) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : fb);
+
+/** 저장 데이터·가져온 파일을 안전한 Shot으로 보정 (구버전·손상 데이터 대비) */
+export function sanitizeShot(raw: unknown, i: number): Shot {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const b = blankShot(i);
+  const qc = Array.isArray(r.qc) ? r.qc : [];
   return {
-    brief: { ...base.brief, ...d.brief },
-    bible: { ...base.bible, ...(d.bible ?? {}) },
-    credit: { ...base.credit, ...(d.credit ?? {}) },
-    characters: Array.isArray(d.characters)
-      ? d.characters.map(({ sheetPrompt: _s, ...c }: Character & { sheetPrompt?: string }) => c)
-      : base.characters,
-    locations: Array.isArray(d.locations) ? d.locations : base.locations,
-    shots: d.shots.map((s: Partial<Shot>, i: number) => {
-      const { prompt: _p, imagePrompt: _i, beatLabel: _b, ...rest } = s as Record<string, unknown>;
-      return { ...blankShot(i), ...rest } as Shot;
-    }),
+    id: str(r.id).trim() || b.id,
+    beat: oneOf(r.beat, BEATS.map((x) => x.key), b.beat),
+    purposeType: oneOf(r.purposeType, ['질문', '답'] as const, '질문'),
+    purpose: str(r.purpose),
+    size: oneOf(r.size, SIZES, b.size),
+    angle: oneOf(r.angle, ANGLES, b.angle),
+    move: oneOf(r.move, MOVES, ''),
+    speed: oneOf(r.speed, SPEEDS, ''),
+    endState: str(r.endState),
+    subject: str(r.subject),
+    action: str(r.action),
+    setting: str(r.setting),
+    lighting: str(r.lighting),
+    transition: oneOf(r.transition, TRANSITIONS, '하드컷'),
+    seconds: Math.max(0, num(r.seconds, b.seconds)),
+    model: oneOf(r.model, MODELS, 'Fast'),
+    keyframe: r.keyframe === true,
+    techniques: Array.isArray(r.techniques) ? r.techniques.filter((t): t is string => typeof t === 'string' && !!techById(t)) : [],
+    characterId: str(r.characterId),
+    locationId: str(r.locationId),
+    screenDir: oneOf(r.screenDir, SCREEN_DIRS, ''),
+    sfx: str(r.sfx),
+    narration: str(r.narration),
+    takes: Math.max(0, Math.round(num(r.takes))),
+    defects: Array.isArray(r.defects) ? r.defects.filter((t): t is string => typeof t === 'string') : [],
+    status: oneOf(r.status, STATUSES, '대기'),
+    credits: Math.max(0, num(r.credits)),
+    qc: [0, 1, 2, 3, 4].map((k) => Math.min(5, Math.max(0, Math.round(num(qc[k]))))) as Shot['qc'],
   };
+}
+
+export function sanitizeProject(d: unknown): Project {
+  const o = (d && typeof d === 'object' ? d : {}) as Record<string, unknown>;
+  const br = (o.brief && typeof o.brief === 'object' ? o.brief : null) as Record<string, unknown> | null;
+  if (!br || !Array.isArray(o.shots)) throw new Error('형식이 맞지 않는 파일입니다 (brief/shots 없음)');
+  const preset = oneOf(br.preset, PRESET_KEYS, 'A');
+  const base = defaultProject(preset);
+  const bi = (o.bible && typeof o.bible === 'object' ? o.bible : {}) as Record<string, unknown>;
+  const facts = Array.isArray(br.facts) ? br.facts : [];
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object') : null) as Record<string, unknown>[] | null;
+  const chars = list(o.characters);
+  const locs = list(o.locations);
+  return {
+    id: str(o.id) || base.id,
+    updatedAt: num(o.updatedAt, Date.now()),
+    brief: {
+      series: str(br.series),
+      channel: str(br.channel),
+      preset,
+      format: oneOf(br.format, ['shorts', 'long'] as const, 'shorts'),
+      topic: str(br.topic),
+      facts: [str(facts[0]), str(facts[1]), str(facts[2])],
+      episode: str(br.episode),
+      audio: br.audio !== false,
+    },
+    bible: {
+      name: str(bi.name, base.bible.name),
+      block: str(bi.block, base.bible.block),
+      lensWide: str(bi.lensWide, base.bible.lensWide),
+      lensClose: str(bi.lensClose, base.bible.lensClose),
+      render: str(bi.render, base.bible.render),
+    },
+    characters: chars
+      ? chars.map((c, i) => ({ id: str(c.id) || `C${i + 1}`, name: str(c.name), look: str(c.look), wardrobe: str(c.wardrobe), signature: str(c.signature), ready: c.ready === true }))
+      : base.characters,
+    locations: locs
+      ? locs.map((l, i) => ({ id: str(l.id) || `L${i + 1}`, name: str(l.name), place: str(l.place), details: str(l.details), ready: l.ready === true }))
+      : base.locations,
+    shots: o.shots.map(sanitizeShot),
+  };
+}
+
+export function parseProject(text: string): Project {
+  return sanitizeProject(JSON.parse(text));
 }
 
 const md = (s: string | number) => String(s).replace(/\|/g, '\\|').replace(/\n/g, ' ');
@@ -643,19 +727,20 @@ const md = (s: string | number) => String(s).replace(/\|/g, '\\|').replace(/\n/g
 export function exportMarkdown(p: Project): string {
   const b = p.brief;
   const head = [
-    `# ${b.series || '제목 없음'} — 콘티`,
+    `# ${[b.series, b.episode].filter(Boolean).join(' · ') || '제목 없음'} — 콘티`,
     '',
     `- 채널: ${b.channel || '-'} / 프리셋: ${p.bible.name} / 포맷: ${b.format === 'shorts' ? '쇼츠 60초 9:16' : '롱폼 16:9'}`,
     `- 주제: ${b.topic || '-'}`,
     ...b.facts.filter(Boolean).map((f, i) => `- 핵심 사실 ${i + 1}: ${f}`),
     '',
-    '| 샷ID | 비트 | 목적 | 샷크기 | 앵글 | 카메라무브 | 피사체·동작 | 조명·시간 | 연출 기법 | 전환 | 초 | 모델 | 키프레임 |',
-    '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| 샷ID | 비트 | 나레이션 | 목적 | 샷크기 | 앵글 | 카메라무브 | 피사체·동작 | 조명·시간 | 연출 기법 | 전환 | 초 | 모델 | 키프레임 |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ];
   const rows = p.shots.map((s) =>
     `| ${[
       s.id,
       beatLabel(s.beat),
+      s.narration || '-',
       `${s.purposeType}: ${s.purpose}`,
       s.size,
       s.angle,
@@ -675,9 +760,9 @@ export function exportMarkdown(p: Project): string {
     '',
     `### ${s.id} 영상 프롬프트`,
     '```',
-    buildVideoPrompt(s, p.bible, b.format, p.characters, p.locations),
+    shotPrompt(p, s),
     '```',
-    ...(s.keyframe ? ['', `### ${s.id} 키프레임 이미지 프롬프트`, '```', buildImagePrompt(s, p.bible, b.format, p.characters, p.locations), '```'] : []),
+    ...(s.keyframe ? ['', `### ${s.id} 키프레임 이미지 프롬프트`, '```', shotImagePrompt(p, s), '```'] : []),
   ]);
   return [...head, ...rows, '', '## 프롬프트', ...prompts, ''].join('\n');
 }

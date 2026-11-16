@@ -12,7 +12,7 @@ import {
   aspectOf,
   beatLabel,
   blankShot,
-  buildVideoPrompt,
+  shotPrompt,
   type Bible,
   type BeatKey,
   type FormatKey,
@@ -107,6 +107,7 @@ export function buildScenarioRequest(p: Project): string {
     `id ("S01"...), beat (${BEATS.map((x) => x.key).join('|')}), purposeType ("질문"|"답"), purpose (Korean, short),`,
     `size (${SIZES.join('|')}), angle (${ANGLES.join('|')}), move (${MOVES.filter(Boolean).join('|')}), speed (${SPEEDS.filter(Boolean).join('|')} or ""),`,
     'endState (English camera end frame), subject (English), action (English, ONE action), setting (English), lighting (English, include time of day),',
+    'narration (KOREAN voice-over line for this shot, spoken style, max 6 Korean characters per second of the shot; the 8 lines must read as one continuous script that covers the key facts), sfx (English, short sound effect note),',
     `screenDir (${SCREEN_DIRS.filter(Boolean).join('|')} or ""), transition (${TRANSITIONS.join('|')}), seconds (number), model (${MODELS.join('|')}), keyframe (true|false),`,
     `characterId (${p.characters.map((c) => c.id).join('|') || '""'} or ""), locationId (${p.locations.map((l) => l.id).join('|') || '""'} or ""),`,
     `techniques (array of 0-2 ids; a technique with move:... must match the shot's move): ${tech}`,
@@ -165,6 +166,8 @@ export function parseScenarioResponse(text: string, p: Project): { shots: Shot[]
       action: str('action'),
       setting: str('setting'),
       lighting: str('lighting'),
+      narration: str('narration'),
+      sfx: str('sfx'),
       screenDir: fix('screenDir', SCREEN_DIRS, ''),
       transition: fix('transition', TRANSITIONS, '하드컷'),
       seconds: Number.isFinite(sec) && sec > 0 ? Math.min(sec, 20) : base.seconds,
@@ -200,8 +203,8 @@ export function buildAudioCue(p: Project): string {
   const rows = p.shots.map((s) => {
     const from = t;
     t += Number(s.seconds) || 0;
-    const sfx = s.sfx.trim() || `ambience of ${clean(s.setting) || 'the scene'}; foley for: ${clean(s.action) || 'subtle movement'}`;
-    return `${s.id} [${tc(from)}-${tc(t)}] ${beatLabel(s.beat)} — SFX: ${sfx}`;
+    const sfx = (s.sfx ?? '').trim() || `ambience of ${clean(s.setting) || 'the scene'}; foley for: ${clean(s.action) || 'subtle movement'}`;
+    return `${s.id} [${tc(from)}-${tc(t)}] ${beatLabel(s.beat)} — SFX: ${sfx}${s.narration?.trim() ? ` — VO: ${s.narration.trim()}` : ''}`;
   });
   const music = BEATS.map((b) => `- ${b.label} ${b.from}-${b.to}s: ${BEAT_MUSIC[b.key]}`);
   return [
@@ -216,9 +219,10 @@ export function buildAudioCue(p: Project): string {
 }
 
 // ───────── 5) 편집 큐시트 CSV (캡컷·프리미어 배치용) ─────────
-export const tc = (sec: number) => {
+export const tc = (raw: number) => {
+  const sec = Math.round(raw * 10) / 10;
   const m = Math.floor(sec / 60);
-  const s = sec - m * 60;
+  const s = Math.round((sec - m * 60) * 10) / 10;
   return `${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`;
 };
 
@@ -226,16 +230,16 @@ export function buildEditCsv(p: Project): string {
   const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
   const series = (p.brief.series || 'series').replace(/[\\/:*?"<>|\s]+/g, '_');
   let t = 0;
-  const head = ['순서', '샷ID', '시작', '끝', '길이(초)', '비트', '전환', '상태', '모델', '파일명'];
+  const head = ['순서', '샷ID', '시작', '끝', '길이(초)', '비트', '전환', '상태', '모델', '파일명', '나레이션'];
   const rows = p.shots.map((s, i) => {
     const from = t;
     t += Number(s.seconds) || 0;
-    return [i + 1, s.id, tc(from), tc(t), s.seconds, beatLabel(s.beat), s.transition, s.status, s.model, `${series}_${s.id}_v1.mp4`];
+    return [i + 1, s.id, tc(from), tc(t), s.seconds, beatLabel(s.beat), s.transition, s.status, s.model, `${series}_${s.id}_v1.mp4`, s.narration ?? ''];
   });
   return '﻿' + [head, ...rows].map((r) => r.map(esc).join(',')).join('\r\n');
 }
 
-export const promptFor = (s: Shot, p: Project) => buildVideoPrompt(s, p.bible, p.brief.format, p.characters, p.locations);
+export const promptFor = (s: Shot, p: Project) => shotPrompt(p, s);
 
 /** 다운로드 파일명: 브라우저가 한글·기호(ⓒ) 파일명을 'download'로 바꾸는 경우가 있어 영문·숫자만 사용.
  *  형식: flow_<시리즈 영문부분>_C_<YYYYMMDD-HHMM>.<ext>  (C = Claude 생성 식별자) */
